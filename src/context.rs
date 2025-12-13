@@ -1,8 +1,8 @@
-use std::sync::Arc;
+use std::{ops::Add, sync::Arc};
 
 use tokio::sync::Notify;
 
-use crate::{Actor, Addr};
+use crate::{actor::ActorId, message::Terminated, watcher::Watcher, Actor, Addr, Handler};
 
 ///Runtime context for an actor
 pub struct Context<A: Actor> {
@@ -32,10 +32,26 @@ impl<A: Actor> Context<A> {
         self.addr.clone()
     }
 
+    /// Get this actor's ID
+    pub fn id(&self) -> ActorId {
+        self.addr.id()
+    }
+
     ///stop the actor associated with this context
     pub fn stop(&self) {
         if let Some(signal) = &self.stop_signal {
             signal.notify_one();
         }
+    }
+
+    /// Watch another actor - receive Terminated when it dies
+    /// When the watched actor stops, this actor will receive
+    /// a Terminated message with the dead actor's ID
+    pub fn watch<B>(&self, addr: &Addr<B>)
+    where
+        B: Actor,
+        A: Handler<Terminated>,
+    {
+        addr.watch(self.addr.clone());
     }
 }

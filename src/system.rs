@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use tokio::sync::{mpsc, Notify};
 
-use crate::{envelope::Envelope, Actor, Addr, Context};
+use crate::{actor::ActorId, envelope::Envelope, Actor, Addr, Context};
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
@@ -44,9 +44,12 @@ where
     A: Actor,
 {
     let (tx, mut rx) = mpsc::unbounded_channel::<Box<dyn Envelope<A>>>();
-    let addr = Addr::new(tx);
+    let id = ActorId::new();
+    let addr = Addr::new(tx, id);
     let stop_signal = Arc::new(Notify::new());
     let mut ctx = Context::with_stop_signal(addr.clone(), stop_signal.clone());
+
+    let addr_for_notify = addr.clone();
 
     tokio::spawn(async move {
         //actor lifecycle start
@@ -90,6 +93,9 @@ where
             //actor panicked, we can log or handle it here
             eprintln!("Actor panicked during message handling. Stopping gracefully.");
         }
+
+        //notify watchers about termination
+        addr_for_notify.notify_watchers();
 
         //actor lifecycle stop
         actor.stopped(&mut ctx);

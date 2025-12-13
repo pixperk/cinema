@@ -1,3 +1,5 @@
+use std::sync::{Arc, Mutex};
+
 use tokio::sync::{mpsc, oneshot};
 
 use crate::{
@@ -12,11 +14,16 @@ use crate::{
 pub struct Addr<A: Actor> {
     sender: mpsc::UnboundedSender<Box<dyn Envelope<A>>>,
     id: ActorId,
+    watchers: Arc<Mutex<Vec<Arc<dyn Watcher>>>>,
 }
 
 impl<A: Actor> Addr<A> {
     pub fn new(sender: mpsc::UnboundedSender<Box<dyn Envelope<A>>>, id: ActorId) -> Self {
-        Self { sender, id }
+        Self {
+            sender,
+            id,
+            watchers: Arc::new(Mutex::new(Vec::new())),
+        }
     }
 
     pub fn id(&self) -> ActorId {
@@ -73,6 +80,23 @@ impl<A: Actor> Addr<A> {
     pub fn is_alive(&self) -> bool {
         !self.sender.is_closed()
     }
+
+    ///register a watcher to be notified when this actor stops
+    /// the watcher will receive a Terminated message with this actor's id
+    pub fn watch<W>(&self, watcher: Addr<W>)
+    where
+        W: Actor + Handler<Terminated>,
+    {
+        let watcher_arc = Arc::new(watcher);
+        self.watchers.lock().unwrap().push(watcher_arc);
+    }
+
+    pub(crate) fn notify_watchers(&self) {
+        let watchers = self.watchers.lock().unwrap();
+        for watcher in watchers.iter() {
+            watcher.notify(self.id);
+        }
+    }
 }
 
 impl<A: Actor> Clone for Addr<A> {
@@ -80,6 +104,7 @@ impl<A: Actor> Clone for Addr<A> {
         Self {
             sender: self.sender.clone(),
             id: self.id,
+            watchers: self.watchers.clone(),
         }
     }
 }
