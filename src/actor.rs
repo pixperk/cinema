@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use crate::{Context, Message};
 
 //it is an entity which has own state, also
@@ -5,6 +7,24 @@ use crate::{Context, Message};
 pub trait Actor: Send + Sized + 'static {
     fn started(&mut self, ctx: &mut Context<Self>) {}
     fn stopped(&mut self, ctx: &mut Context<Self>) {}
+}
+
+/// Unique identifier for an actor
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ActorId(u64);
+
+static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+
+impl ActorId {
+    pub fn new() -> Self {
+        Self(NEXT_ID.fetch_add(1, Ordering::SeqCst))
+    }
+}
+
+impl Default for ActorId {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// Defines how an actor handles a specific message type.

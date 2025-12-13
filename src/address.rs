@@ -60,6 +60,11 @@ impl<A: Actor> Addr<A> {
         let envelope = MessageEnvelope::new(msg);
         let _ = self.sender.send(Box::new(envelope));
     }
+
+    ///Check if the actor is still alive
+    pub fn is_alive(&self) -> bool {
+        !self.sender.is_closed()
+    }
 }
 
 impl<A: Actor> Clone for Addr<A> {
