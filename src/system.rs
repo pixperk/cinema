@@ -4,6 +4,8 @@ use tokio::sync::{mpsc, Notify};
 
 use crate::{envelope::Envelope, Actor, Addr, Context};
 
+use std::panic::{catch_unwind, AssertUnwindSafe};
+
 ///Actor system for managing actors and their lifecycle
 pub struct ActorSystem {
     //shared notify for graceful shutdown
@@ -50,30 +52,43 @@ where
         //actor lifecycle start
         actor.started(&mut ctx);
 
-        loop {
+        let panic_occured = loop {
             tokio::select! {
                 //message processing loop
                 msg = rx.recv() => {
                     match msg{
                         Some(envelope) => {
-                            envelope.handle(&mut actor, &mut ctx);
+                            let result =   catch_unwind(AssertUnwindSafe(|| {
+                                envelope.handle(&mut actor, &mut ctx);
+                            }));
+
+                            if result.is_err() {
+                                //panic occurred during message handling
+                                break true;
+                            }
+
                         },
                         None => {
                             //channel closed, exit loop
-                            break;
+                            break false;
                         }
                     }
                 }
 
                 _ = shutdown.notified() => {
                     //shutdown signal received, exit loop
-                    break;
+                    break false;
                 }
                 _ = stop_signal.notified() => {
                     //stop signal received, exit loop
-                    break;
+                    break false;
                 }
             }
+        };
+
+        if panic_occured {
+            //actor panicked, we can log or handle it here
+            eprintln!("Actor panicked during message handling. Stopping gracefully.");
         }
 
         //actor lifecycle stop

@@ -13,3 +13,7 @@ path = "tests/basic.rs"
 [[test]]
 name = "system"
 path = "tests/system.rs"
+
+[[test]]
+name = "supervision"
+path = "tests/supervision.rs"
