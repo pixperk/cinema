@@ -6,6 +6,7 @@ pub mod error;
 pub mod message;
 pub mod supervisor;
 pub mod system;
+pub mod watcher;
 
 pub use actor::{Actor, Handler};
 pub use address::Addr;

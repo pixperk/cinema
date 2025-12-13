@@ -1,18 +1,26 @@
 use tokio::sync::{mpsc, oneshot};
 
 use crate::{
+    actor::ActorId,
     envelope::{Envelope, MessageEnvelope},
     error::MailboxError,
+    message::Terminated,
+    watcher::Watcher,
     Actor, Handler, Message,
 };
 
 pub struct Addr<A: Actor> {
     sender: mpsc::UnboundedSender<Box<dyn Envelope<A>>>,
+    id: ActorId,
 }
 
 impl<A: Actor> Addr<A> {
-    pub fn new(sender: mpsc::UnboundedSender<Box<dyn Envelope<A>>>) -> Self {
-        Self { sender }
+    pub fn new(sender: mpsc::UnboundedSender<Box<dyn Envelope<A>>>, id: ActorId) -> Self {
+        Self { sender, id }
+    }
+
+    pub fn id(&self) -> ActorId {
+        self.id
     }
 
     ///Send message and wait for response
@@ -71,6 +79,16 @@ impl<A: Actor> Clone for Addr<A> {
     fn clone(&self) -> Self {
         Self {
             sender: self.sender.clone(),
+            id: self.id,
         }
+    }
+}
+
+impl<A> Watcher for Addr<A>
+where
+    A: Actor + Handler<Terminated>,
+{
+    fn notify(&self, id: ActorId) {
+        self.do_send(Terminated { id });
     }
 }
