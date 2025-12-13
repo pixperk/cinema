@@ -1,3 +1,5 @@
+use tokio::sync::oneshot;
+
 use crate::{Actor, Context, Handler, Message};
 
 ///Envelope acts as a type erasure for messages sent to actors
@@ -11,12 +13,25 @@ where
     M: Message,
 {
     //an optional message, once taken it becomes None
-    pub msg: Option<M>,
+    msg: Option<M>,
+    response_tx: Option<oneshot::Sender<M::Result>>,
 }
 
 impl<M: Message> MessageEnvelope<M> {
+    ///fire and forget message envelope (no response expected)
     pub fn new(msg: M) -> Self {
-        Self { msg: Some(msg) }
+        Self {
+            msg: Some(msg),
+            response_tx: None,
+        }
+    }
+
+    ///with response channel
+    pub fn with_response(msg: M, tx: oneshot::Sender<M::Result>) -> Self {
+        Self {
+            msg: Some(msg),
+            response_tx: Some(tx),
+        }
     }
 }
 
@@ -27,8 +42,12 @@ where
 {
     fn handle(mut self: Box<Self>, actor: &mut A, ctx: &mut Context<A>) {
         if let Some(msg) = self.msg.take() {
-            actor.handle(msg, ctx);
-            //ignore the result for now
+            let result = actor.handle(msg, ctx);
+
+            if let Some(tx) = self.response_tx.take() {
+                //error can be ignored if receiver is dropped
+                let _ = tx.send(result);
+            }
         }
     }
 }

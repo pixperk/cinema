@@ -9,5 +9,6 @@ pub mod system;
 pub use actor::{Actor, Handler};
 pub use address::Addr;
 pub use context::Context;
+pub use error::MailboxError;
 pub use message::Message;
 pub use system::ActorSystem;
