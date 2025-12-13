@@ -47,3 +47,30 @@ async fn send_message() {
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     assert_eq!(count.load(Ordering::SeqCst), 10);
 }
+
+struct Calculator;
+
+struct Add(u32, u32);
+impl Message for Add {
+    type Result = u32;
+}
+
+impl Actor for Calculator {}
+
+impl Handler<Add> for Calculator {
+    fn handle(&mut self, msg: Add, _ctx: &mut Context<Self>) -> u32 {
+        msg.0 + msg.1
+    }
+}
+
+#[tokio::test]
+async fn request_response() {
+    let sys = ActorSystem::new();
+    let addr = sys.spawn(Calculator);
+
+    let result = addr.send(Add(5, 7)).await.unwrap();
+    assert_eq!(result, 12);
+
+    let result = addr.send(Add(20, 22)).await.unwrap();
+    assert_eq!(result, 42);
+}
