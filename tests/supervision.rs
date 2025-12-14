@@ -1,6 +1,6 @@
 use std::{
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU32, Ordering},
         Arc,
     },
     time::Duration,
@@ -8,6 +8,7 @@ use std::{
 
 use cinema::{
     address::ChildHandle, message::Terminated, Actor, ActorSystem, Addr, Context, Handler, Message,
+    SupervisorStrategy,
 };
 
 // ======== Panic Handling Tests ========
@@ -258,4 +259,145 @@ async fn child_stopping_notifies_parent() {
         PARENT_NOTIFIED.load(Ordering::SeqCst),
         "Parent should receive Terminated"
     );
+}
+
+// ======== Restart Strategy Tests ========
+///actor restarts on panic according to strategy
+#[tokio::test]
+async fn actor_restarts_on_panic() {
+    static RESTART_COUNT: AtomicU32 = AtomicU32::new(0);
+
+    struct RestartableWorker;
+
+    impl Actor for RestartableWorker {
+        fn started(&mut self, _ctx: &mut Context<Self>) {
+            RESTART_COUNT.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    struct CrashMsg;
+    impl Message for CrashMsg {
+        type Result = ();
+    }
+
+    impl Handler<CrashMsg> for RestartableWorker {
+        fn handle(&mut self, _msg: CrashMsg, _ctx: &mut Context<Self>) {
+            panic!("Intentional crash for restart test");
+        }
+    }
+
+    struct Supervisor;
+    impl Actor for Supervisor {}
+
+    impl Handler<Terminated> for Supervisor {
+        fn handle(&mut self, _msg: Terminated, _ctx: &mut Context<Self>) {}
+    }
+
+    struct SpawnWorker;
+    impl Message for SpawnWorker {
+        type Result = Addr<RestartableWorker>;
+    }
+
+    impl Handler<SpawnWorker> for Supervisor {
+        fn handle(
+            &mut self,
+            _msg: SpawnWorker,
+            ctx: &mut Context<Self>,
+        ) -> Addr<RestartableWorker> {
+            ctx.spawn_child_with_strategy(
+                || RestartableWorker,
+                SupervisorStrategy::restart(5, Duration::from_secs(10)),
+            )
+        }
+    }
+
+    let sys = ActorSystem::new();
+    let supervisor = sys.spawn(Supervisor);
+
+    let worker = supervisor.send(SpawnWorker).await.unwrap();
+
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    assert_eq!(RESTART_COUNT.load(Ordering::SeqCst), 1);
+
+    for i in 2..=4 {
+        worker.do_send(CrashMsg);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(RESTART_COUNT.load(Ordering::SeqCst), i);
+    }
+}
+
+///actor stops after exceeding max restarts
+#[tokio::test]
+async fn actor_stops_after_max_restarts() {
+    static RESTART_COUNT: AtomicU32 = AtomicU32::new(0);
+    static TERMINATED_RECEIVED: AtomicBool = AtomicBool::new(false);
+
+    struct FragileWorker;
+    impl Actor for FragileWorker {
+        fn started(&mut self, _ctx: &mut Context<Self>) {
+            RESTART_COUNT.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    struct CrashMsg;
+    impl Message for CrashMsg {
+        type Result = ();
+    }
+
+    impl Handler<CrashMsg> for FragileWorker {
+        fn handle(&mut self, _msg: CrashMsg, _ctx: &mut Context<Self>) {
+            panic!("Intentional crash for restart limit test");
+        }
+    }
+
+    struct Supervisor;
+    impl Actor for Supervisor {}
+    impl Handler<Terminated> for Supervisor {
+        fn handle(&mut self, _msg: Terminated, _ctx: &mut Context<Self>) {
+            TERMINATED_RECEIVED.store(true, Ordering::SeqCst);
+        }
+    }
+
+    struct SpawnFragileWorker;
+    impl Message for SpawnFragileWorker {
+        type Result = Addr<FragileWorker>;
+    }
+
+    impl Handler<SpawnFragileWorker> for Supervisor {
+        fn handle(
+            &mut self,
+            _msg: SpawnFragileWorker,
+            ctx: &mut Context<Self>,
+        ) -> Addr<FragileWorker> {
+            ctx.spawn_child_with_strategy(
+                || FragileWorker,
+                SupervisorStrategy::restart(2, Duration::from_secs(10)),
+            )
+        }
+    }
+
+    let sys = ActorSystem::new();
+    let supervisor = sys.spawn(Supervisor);
+
+    let worker = supervisor.send(SpawnFragileWorker).await.unwrap();
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Crash 3 times - limit is 2
+    worker.do_send(CrashMsg);
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    worker.do_send(CrashMsg);
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    worker.do_send(CrashMsg);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Should have started 3 times (initial + 2 restarts), then stopped
+    assert_eq!(RESTART_COUNT.load(Ordering::SeqCst), 3);
+    assert!(
+        TERMINATED_RECEIVED.load(Ordering::SeqCst),
+        "Supervisor should receive Terminated"
+    );
+    assert!(!worker.is_alive(), "Worker should be dead");
 }
