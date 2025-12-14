@@ -11,6 +11,8 @@ use cinema::{
     Actor, ActorSystem, Context, Handler, MailboxError, Message, TimerHandle,
 };
 
+// ======== Basic Message Passing Tests ========
+
 struct Ping;
 impl Message for Ping {
     type Result = ();
@@ -53,6 +55,8 @@ async fn send_message() {
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     assert_eq!(count.load(Ordering::SeqCst), 10);
 }
+
+// ======== Request-Response Tests ========
 
 struct Calculator;
 
@@ -104,6 +108,8 @@ async fn send_to_stopped_actor_fails() {
     assert!(result.is_err());
     assert_eq!(result.err().unwrap(), MailboxError::MailboxClosed);
 }
+
+// ======== Timer Tests ========
 
 struct Tick;
 impl Message for Tick {
@@ -351,6 +357,8 @@ async fn cancelled_interval_stops_firing() {
         "Count should not increase after cancel"
     );
 }
+
+// ======== Async Handler Tests ========
 
 struct FetchData;
 impl Message for FetchData {

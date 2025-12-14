@@ -10,6 +10,8 @@ use cinema::{
     address::ChildHandle, message::Terminated, Actor, ActorSystem, Addr, Context, Handler, Message,
 };
 
+// ======== Panic Handling Tests ========
+
 struct Crash;
 
 impl Message for Crash {
@@ -85,6 +87,8 @@ async fn actor_continues_after_normal_messages() {
     assert!(stopped_called.load(Ordering::SeqCst));
 }
 
+// ======== Death Watch Tests ========
+
 struct Die;
 impl Message for Die {
     type Result = ();
@@ -151,6 +155,8 @@ async fn watch_notifies_on_death() {
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert!(worker_died.load(Ordering::SeqCst));
 }
+
+// ======== Child Actor Tests ========
 
 ///parent stopping kills child actors
 #[tokio::test]

@@ -5,6 +5,8 @@ use std::sync::{
 
 use cinema::{Actor, Handler, Message};
 
+// ======== Actor Lifecycle Tests ========
+
 struct StopMe;
 
 impl Message for StopMe {

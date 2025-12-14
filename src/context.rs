@@ -8,8 +8,8 @@ use futures::FutureExt;
 use tokio::sync::{mpsc, Notify};
 
 use crate::{
-    actor::ActorId, address::ChildHandle, envelope::ActorMessage, message::Terminated, Actor, Addr,
-    Handler, Message, TimerHandle,
+    actor::ActorId, address::ChildHandle, envelope::ActorMessage, message::Terminated,
+    supervisor::RestartTracker, Actor, Addr, Handler, Message, SupervisorStrategy, TimerHandle,
 };
 
 ///Runtime context for an actor
@@ -130,10 +130,28 @@ impl<A: Actor> Context<A> {
     /// Child inherits shutdown signal from parent
     /// Stops when parent stops
     /// Parent receives Terminated message when child stops
-    pub fn spawn_child<C>(&mut self, mut child: C) -> Addr<C>
+    pub fn spawn_child<C>(&mut self, child: C) -> Addr<C>
     where
         C: Actor,
         A: Handler<Terminated>,
+    {
+        let mut child_opt = Some(child);
+        self.spawn_child_with_strategy(
+            move || child_opt.take().expect("Factory called more than once"),
+            SupervisorStrategy::Stop,
+        )
+    }
+
+    /// Spawn a child with custom restart strategy
+    pub fn spawn_child_with_strategy<C, F>(
+        &mut self,
+        mut factory: F,
+        strategy: SupervisorStrategy,
+    ) -> Addr<C>
+    where
+        C: Actor,
+        A: Handler<Terminated>,
+        F: FnMut() -> C + Send + 'static,
     {
         let (tx, mut rx) = mpsc::unbounded_channel::<ActorMessage<C>>();
         let child_id = ActorId::new();
@@ -141,52 +159,86 @@ impl<A: Actor> Context<A> {
         let child_addr = Addr::new(tx, child_id, child_stop_signal.clone());
 
         let shutdown = self.shutdown.clone();
-        let mut child_ctx = Context::with_stop_signal(
-            child_addr.clone(),
-            child_stop_signal.clone(),
-            shutdown.clone(),
-        );
-
         let child_addr_for_notify = child_addr.clone();
 
         tokio::spawn(async move {
-            child.started(&mut child_ctx);
-
-            let panic_occurred = loop {
-                tokio::select! {
-                    msg = rx.recv() => {
-                        match msg {
-                            Some(actor_msg) => {
-                                let result = match actor_msg {
-                                    ActorMessage::Sync(envelope) => {
-                                        catch_unwind(AssertUnwindSafe(|| {
-                                            envelope.handle(&mut child, &mut child_ctx)
-                                        }))
-                                    }
-                                    ActorMessage::Async(envelope) => {
-                                        let fut = envelope.handle(&mut child, &mut child_ctx);
-                                        AssertUnwindSafe(fut).catch_unwind().await
-                                    }
-                                };
-                                if result.is_err() {
-                                    break true;
-                                }
-                            }
-                            None => break false,
-                        }
-                    }
-                    _ = shutdown.notified() => break false,
-                    _ = child_stop_signal.notified() => break false,
-                }
+            let mut tracker = match &strategy {
+                SupervisorStrategy::Restart {
+                    max_restarts,
+                    within,
+                } => Some(RestartTracker::new(*max_restarts, *within)),
+                _ => None,
             };
 
-            if panic_occurred {
-                eprintln!("Child actor panicked. Stopping gracefully.");
+            'restart: loop {
+                let mut child = factory();
+                let mut child_ctx = Context::with_stop_signal(
+                    child_addr_for_notify.clone(),
+                    child_stop_signal.clone(),
+                    shutdown.clone(),
+                );
+
+                child.started(&mut child_ctx);
+
+                let panic_occurred = loop {
+                    tokio::select! {
+                        msg = rx.recv() => {
+                            match msg {
+                                Some(actor_msg) => {
+                                    let result = match actor_msg {
+                                        ActorMessage::Sync(envelope) => {
+                                            catch_unwind(AssertUnwindSafe(|| {
+                                                envelope.handle(&mut child, &mut child_ctx)
+                                            }))
+                                        }
+                                        ActorMessage::Async(envelope) => {
+                                            let fut = envelope.handle(&mut child, &mut child_ctx);
+                                            AssertUnwindSafe(fut).catch_unwind().await
+                                        }
+                                    };
+                                    if result.is_err() {
+                                        break true;
+                                    }
+                                }
+                                None => break false,
+                            }
+                        }
+                        _ = shutdown.notified() => break false,
+                        _ = child_stop_signal.notified() => break false,
+                    }
+                };
+
+                child_ctx.stop_children();
+                child.stopped(&mut child_ctx);
+
+                if panic_occurred {
+                    match &strategy {
+                        SupervisorStrategy::Stop => {
+                            eprintln!("Child panicked. Strategy: Stop.");
+                            break 'restart;
+                        }
+                        SupervisorStrategy::Restart { .. } => {
+                            if let Some(ref mut t) = tracker {
+                                if t.record_restart() {
+                                    eprintln!("Child panicked. Restarting...");
+                                    continue 'restart;
+                                } else {
+                                    eprintln!("Child exceeded restart limit. Stopping.");
+                                    break 'restart;
+                                }
+                            }
+                        }
+                        SupervisorStrategy::Escalate => {
+                            eprintln!("Child panicked. Strategy: Escalate (TODO).");
+                            break 'restart;
+                        }
+                    }
+                } else {
+                    break 'restart;
+                }
             }
 
             child_addr_for_notify.notify_watchers();
-            child_ctx.stop_children();
-            child.stopped(&mut child_ctx);
         });
 
         //auto watch the child
