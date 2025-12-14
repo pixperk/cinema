@@ -77,7 +77,7 @@ impl<A: Actor> Context<A> {
         B: Actor,
         A: Handler<Terminated>,
     {
-        addr.watch(self.addr.clone());
+        addr.add_watcher(self.addr.clone());
     }
 
     /// Send a message to self after delay

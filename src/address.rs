@@ -120,9 +120,10 @@ impl<A: Actor> Addr<A> {
         !self.sender.is_closed()
     }
 
-    ///register a watcher to be notified when this actor stops
-    /// the watcher will receive a Terminated message with this actor's id
-    pub fn watch<W>(&self, watcher: Addr<W>)
+    /// Add a watcher to be notified when this actor stops
+    /// The watcher will receive a Terminated message with this actor's id
+    /// Prefer using ctx.watch(&target) instead of this method directly
+    pub(crate) fn add_watcher<W>(&self, watcher: Addr<W>)
     where
         W: Actor + Handler<Terminated>,
     {
