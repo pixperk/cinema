@@ -3,8 +3,12 @@ name = "cinema"
 version = "0.1.0"
 edition = "2021"
 
+[workspace]
+members = ["examples/chat"]
+
 [dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "time"] }
+tokio-stream = "0.1"
 futures = "0.3"
 
 [[test]]
@@ -22,6 +26,3 @@ path = "tests/supervision.rs"
 [[test]]
 name = "streams"
 path = "tests/streams.rs"
-
-[dev-dependencies]
-tokio-stream = "0.1"
