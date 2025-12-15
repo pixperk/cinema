@@ -103,16 +103,17 @@ async fn main() {
 
 ```rust
 use cinema::{Actor, Context, SupervisorStrategy};
+use std::time::Duration;
 
 struct Parent;
 struct Child;
 
 impl Actor for Parent {
     fn started(&mut self, ctx: &mut Context<Self>) {
-        // Restart child up to 3 times if it panics
+        // Restart child up to 3 times within 10 seconds
         ctx.spawn_child_with_strategy(
             || Child,
-            SupervisorStrategy::Restart { max_retries: 3 },
+            SupervisorStrategy::restart(3, Duration::from_secs(10)),
         );
     }
 }
@@ -122,8 +123,56 @@ impl Actor for Child {}
 
 **Strategies:**
 - `Stop` - Let actor die (default)
-- `Restart { max_retries }` - Restart on panic, up to N times
+- `Restart { max_restarts, within }` - Restart on panic, up to N times within duration
 - `Escalate` - Propagate failure to parent (OTP-style)
+
+### Escalate (OTP-style failure propagation)
+
+```mermaid
+graph TD
+    G[Grandparent]
+    P[Parent]
+    C[Child]
+
+    G -->|"Restart(3, 10s)"| P
+    P -->|Escalate| C
+
+    C -.->|panic!| P
+    P -.->|escalates| G
+    G -->|restarts| P
+
+    style C fill:#ff6b6b
+    style P fill:#fbbf24
+    style G fill:#22c55e
+```
+
+```rust
+impl Actor for Grandparent {
+    fn started(&mut self, ctx: &mut Context<Self>) {
+        // Grandparent restarts Parent on failure
+        ctx.spawn_child_with_strategy(
+            || Parent,
+            SupervisorStrategy::restart(3, Duration::from_secs(10)),
+        );
+    }
+}
+
+impl Actor for Parent {
+    fn started(&mut self, ctx: &mut Context<Self>) {
+        // Parent escalates Child failures to Grandparent
+        ctx.spawn_child_with_strategy(
+            || Child,
+            SupervisorStrategy::Escalate,
+        );
+    }
+}
+
+impl Actor for Child {
+    fn started(&mut self, _ctx: &mut Context<Self>) {
+        panic!("Child crashes!"); // Parent escalates -> Grandparent restarts Parent
+    }
+}
+```
 
 ## Streams
 
@@ -166,6 +215,89 @@ system.register("my_actor", addr);
 // Lookup
 if let Some(addr) = system.lookup::<MyActor>("my_actor") {
     addr.do_send(SomeMessage);
+}
+```
+
+## CRUD Example
+
+A simple in-memory user store - **no locks needed!**
+
+> The actor processes one message at a time, so state is naturally protected without `Mutex` or `RwLock`.
+
+```rust
+use cinema::{Actor, Handler, Message, ActorSystem, Context};
+use std::collections::HashMap;
+
+// ---- Messages ----
+
+struct CreateUser { id: u64, name: String }
+struct GetUser { id: u64 }
+struct UpdateUser { id: u64, name: String }
+struct DeleteUser { id: u64 }
+
+impl Message for CreateUser { type Result = (); }
+impl Message for GetUser { type Result = Option<String>; }
+impl Message for UpdateUser { type Result = bool; }
+impl Message for DeleteUser { type Result = bool; }
+
+// ---- Actor ----
+
+struct UserStore {
+    users: HashMap<u64, String>,
+}
+
+impl Actor for UserStore {}
+
+impl Handler<CreateUser> for UserStore {
+    fn handle(&mut self, msg: CreateUser, _ctx: &mut Context<Self>) {
+        self.users.insert(msg.id, msg.name);
+    }
+}
+
+impl Handler<GetUser> for UserStore {
+    fn handle(&mut self, msg: GetUser, _ctx: &mut Context<Self>) -> Option<String> {
+        self.users.get(&msg.id).cloned()
+    }
+}
+
+impl Handler<UpdateUser> for UserStore {
+    fn handle(&mut self, msg: UpdateUser, _ctx: &mut Context<Self>) -> bool {
+        if self.users.contains_key(&msg.id) {
+            self.users.insert(msg.id, msg.name);
+            true
+        } else {
+            false
+        }
+    }
+}
+
+impl Handler<DeleteUser> for UserStore {
+    fn handle(&mut self, msg: DeleteUser, _ctx: &mut Context<Self>) -> bool {
+        self.users.remove(&msg.id).is_some()
+    }
+}
+
+// ---- Usage ----
+
+#[tokio::main]
+async fn main() {
+    let system = ActorSystem::new();
+    let store = system.spawn(UserStore { users: HashMap::new() });
+
+    // Create
+    store.do_send(CreateUser { id: 1, name: "Alice".into() });
+
+    // Read
+    let user = store.send(GetUser { id: 1 }).await.unwrap();
+    println!("{:?}", user); // Some("Alice")
+
+    // Update
+    let updated = store.send(UpdateUser { id: 1, name: "Alicia".into() }).await.unwrap();
+    println!("{}", updated); // true
+
+    // Delete
+    let deleted = store.send(DeleteUser { id: 1 }).await.unwrap();
+    println!("{}", deleted); // true
 }
 ```
 
