@@ -40,8 +40,14 @@ impl ActorSystem {
         self.shutdown.notify_waiters();
     }
 
+    /// Register actor by name (auto-unregisters when actor dies)
     pub fn register<A: Actor>(&self, name: &str, addr: Addr<A>) {
-        self.registry.register(name, addr);
+        Registry::register(self.registry.clone(), name, addr);
+    }
+
+    /// Register actor by name (manual unregister required)
+    pub fn register_manual<A: Actor>(&self, name: &str, addr: Addr<A>) {
+        self.registry.register_manual(name, addr);
     }
 
     pub fn lookup<A: Actor>(&self, name: &str) -> Option<Addr<A>> {
