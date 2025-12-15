@@ -62,3 +62,27 @@ where
         }
     }
 }
+
+/// Poll all streams once, remove finished ones
+/// Returns true if any stream produced an item (handler was called)
+pub fn poll_streams<A: Actor>(
+    streams: &mut Vec<Pin<Box<dyn ActorStream<A>>>>,
+    actor: &mut A,
+    ctx: &mut Context<A>,
+    task_ctx: &mut task::Context<'_>,
+) -> bool {
+    let mut any_ready = false;
+
+    streams.retain_mut(|stream| {
+        match stream.as_mut().poll_next(actor, ctx, task_ctx) {
+            Poll::Ready(true) => {
+                any_ready = true;
+                true // keep stream, might have more items
+            }
+            Poll::Ready(false) => false, // stream finished, remove it
+            Poll::Pending => true,        // no item yet, keep stream
+        }
+    });
+
+    any_ready
+}

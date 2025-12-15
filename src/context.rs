@@ -2,6 +2,7 @@ use std::{
     panic::{catch_unwind, AssertUnwindSafe},
     pin::Pin,
     sync::Arc,
+    task::Poll,
     time::Duration,
 };
 
@@ -13,7 +14,7 @@ use crate::{
     address::ChildHandle,
     envelope::ActorMessage,
     message::Terminated,
-    stream::{ActorStream, StreamWrapper},
+    stream::{poll_streams, ActorStream, StreamWrapper},
     supervisor::RestartTracker,
     Actor, Addr, Handler, Message, SupervisorStrategy, TimerHandle,
 };
@@ -218,36 +219,60 @@ impl<A: Actor> Context<A> {
 
                 let child_escalate_signal = child_ctx.escalate_signal();
 
+                // Streams for this child instance
+                let mut streams = Vec::new();
+
                 let panic_occurred = loop {
+                    // Grab any new streams added during last iteration
+                    streams.append(&mut child_ctx.take_streams());
+
+                    // Create stream polling future
+                    let stream_poll = std::future::poll_fn(|task_ctx| {
+                        if streams.is_empty() {
+                            Poll::Pending
+                        } else if poll_streams(&mut streams, &mut child, &mut child_ctx, task_ctx)
+                        {
+                            Poll::Ready(())
+                        } else {
+                            Poll::Pending
+                        }
+                    });
+
                     tokio::select! {
-                                    msg = rx.recv() => {
-                                        match msg {
-                                            Some(actor_msg) => {
-                                                let result = match actor_msg {
-                                                    ActorMessage::Sync(envelope) => {
-                                                        catch_unwind(AssertUnwindSafe(|| {
-                                                            envelope.handle(&mut child, &mut child_ctx)
-                                                        }))
-                                                    }
-                                                    ActorMessage::Async(envelope) => {
-                                                        let fut = envelope.handle(&mut child, &mut child_ctx);
-                                                        AssertUnwindSafe(fut).catch_unwind().await
-                                                    }
-                                                };
-                                                if result.is_err() {
-                                                    break true;
-                                                }
-                                            }
-                                            None => break false,
+                        biased;
+
+                        msg = rx.recv() => {
+                            match msg {
+                                Some(actor_msg) => {
+                                    let result = match actor_msg {
+                                        ActorMessage::Sync(envelope) => {
+                                            catch_unwind(AssertUnwindSafe(|| {
+                                                envelope.handle(&mut child, &mut child_ctx)
+                                            }))
                                         }
+                                        ActorMessage::Async(envelope) => {
+                                            let fut = envelope.handle(&mut child, &mut child_ctx);
+                                            AssertUnwindSafe(fut).catch_unwind().await
+                                        }
+                                    };
+                                    if result.is_err() {
+                                        break true;
                                     }
-                                    _ = shutdown.notified() => break false,
-                                    _ = child_stop_signal.notified() => break false,
-                                    _ = child_escalate_signal.notified() => {
-                        eprintln!("Child received escalate from grandchild.");
-                        break true;
-                    }
                                 }
+                                None => break false,
+                            }
+                        }
+                        _ = stream_poll => {
+                            // Stream item handled inside poll_streams
+                            continue;
+                        }
+                        _ = shutdown.notified() => break false,
+                        _ = child_stop_signal.notified() => break false,
+                        _ = child_escalate_signal.notified() => {
+                            eprintln!("Child received escalate from grandchild.");
+                            break true;
+                        }
+                    }
                 };
 
                 child_ctx.stop_children();

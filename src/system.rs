@@ -1,9 +1,10 @@
 use std::sync::Arc;
+use std::task::Poll;
 
 use futures::FutureExt;
 use tokio::sync::{mpsc, Notify};
 
-use crate::{actor::ActorId, envelope::ActorMessage, Actor, Addr, Context};
+use crate::{actor::ActorId, envelope::ActorMessage, stream::poll_streams, Actor, Addr, Context};
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
@@ -61,8 +62,28 @@ where
 
         let escalate_signal = ctx.escalate_signal();
 
+        // Streams are managed outside select to avoid borrow conflicts
+        let mut streams = Vec::new();
+
         let panic_occured = loop {
+            // Grab any new streams added during last iteration
+            streams.append(&mut ctx.take_streams());
+
+            // Create stream polling future (only if we have streams)
+            let stream_poll = std::future::poll_fn(|task_ctx| {
+                if streams.is_empty() {
+                    // No streams, never ready (will be ignored by select)
+                    Poll::Pending
+                } else if poll_streams(&mut streams, &mut actor, &mut ctx, task_ctx) {
+                    Poll::Ready(())
+                } else {
+                    Poll::Pending
+                }
+            });
+
             tokio::select! {
+                biased; // Prioritize messages over streams
+
                 msg = rx.recv() => {
                     match msg {
                         Some(actor_msg) => {
@@ -85,6 +106,11 @@ where
                             break false;
                         }
                     }
+                }
+                _ = stream_poll => {
+                    // Stream item was handled inside poll_streams
+                    // Continue to check for more items or messages
+                    continue;
                 }
                 _ = shutdown.notified() => {
                     break false;
