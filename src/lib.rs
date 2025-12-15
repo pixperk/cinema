@@ -10,7 +10,7 @@ pub mod system;
 pub mod timer;
 pub mod watcher;
 
-pub use actor::{Actor, Handler};
+pub use actor::{Actor, Handler, StreamHandler};
 pub use address::Addr;
 pub use context::Context;
 pub use error::MailboxError;

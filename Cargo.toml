@@ -18,3 +18,10 @@ path = "tests/system.rs"
 [[test]]
 name = "supervision"
 path = "tests/supervision.rs"
+
+[[test]]
+name = "streams"
+path = "tests/streams.rs"
+
+[dev-dependencies]
+tokio-stream = "0.1"
