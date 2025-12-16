@@ -1,4 +1,16 @@
-use std::marker::PhantomData;
+use std::{
+    marker::PhantomData,
+    sync::atomic::{AtomicU64, Ordering},
+};
+
+use crate::remote::{proto::Envelope, RemoteClient, RemoteMessage, TransportError};
+
+///global correlation id counter
+static CORRELATION_ID: AtomicU64 = AtomicU64::new(1);
+
+fn next_correlation_id() -> u64 {
+    CORRELATION_ID.fetch_add(1, Ordering::Relaxed)
+}
 
 ///unique identifier for a remote node
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -14,19 +26,43 @@ pub struct RemoteActorId {
 ///remote address - points to an actor on another node
 pub struct RemoteAddr<A> {
     pub id: RemoteActorId,
-    pub node_addr: String,
+    client: RemoteClient,
     _phantom: PhantomData<A>,
 }
 
 impl<A> RemoteAddr<A> {
-    pub fn new(node_id: &str, actor_name: &str, node_addr: &str) -> Self {
+    pub fn new(node_id: &str, actor_name: &str, client: RemoteClient) -> Self {
         Self {
             id: RemoteActorId {
                 node: NodeId(node_id.to_string()),
                 actor_name: actor_name.to_string(),
             },
-            node_addr: node_addr.to_string(),
+            client,
             _phantom: PhantomData,
         }
+    }
+
+    ///fire and forget send to remote actor
+    pub async fn do_send<M>(&self, msg: M) -> Result<(), TransportError>
+    where
+        M: RemoteMessage,
+    {
+        let envelope = Envelope::from_message(
+            &msg,
+            next_correlation_id(),
+            "local", //todo : proper node identity
+            &self.id.actor_name,
+        );
+
+        self.client.do_send(envelope).await
+    }
+
+    pub async fn send<M>(&self, msg: M) -> Result<Envelope, TransportError>
+    where
+        M: RemoteMessage,
+    {
+        let envelope =
+            Envelope::from_message(&msg, next_correlation_id(), "local", &self.id.actor_name);
+        self.client.send(envelope).await
     }
 }
