@@ -1,3 +1,7 @@
+mod registry;
+
+pub use registry::{deserialize_payload, register_message};
+
 use bytes::{Bytes, BytesMut};
 use prost::Message as ProstMessage;
 

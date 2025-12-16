@@ -11,14 +11,19 @@ categories = ["concurrency", "asynchronous"]
 members = ["examples/chat"]
 
 [dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "time"] }
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "sync",
+    "macros",
+    "time",
+] }
 tokio-stream = "0.1"
 futures = "0.3"
-prost = "0.13"
+prost = "0.14"
 bytes = "1"
 
 [build-dependencies]
-prost-build = "0.13"
+prost-build = "0.14"
 
 [[test]]
 name = "basic"
@@ -35,3 +40,7 @@ path = "tests/supervision.rs"
 [[test]]
 name = "streams"
 path = "tests/streams.rs"
+
+[[test]]
+name = "remote"
+path = "tests/remote.rs"
