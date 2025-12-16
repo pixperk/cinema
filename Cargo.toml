@@ -14,6 +14,11 @@ members = ["examples/chat"]
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "time"] }
 tokio-stream = "0.1"
 futures = "0.3"
+prost = "0.13"
+bytes = "1"
+
+[build-dependencies]
+prost-build = "0.13"
 
 [[test]]
 name = "basic"
