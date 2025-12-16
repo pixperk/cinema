@@ -1,12 +1,12 @@
 use cinema::{
     remote::{
-        deserialize_payload, proto::Envelope, register_message, Connection, RemoteMessage,
-        TcpConnection, TcpTransport, Transport,
+        deserialize_payload, proto::Envelope, register_message, Connection, RemoteClient,
+        RemoteMessage, TcpConnection, TcpTransport, Transport,
     },
     Message,
 };
 use prost::Message as ProstMessage;
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
 
 #[derive(Clone, ProstMessage)]
 struct Ping {
@@ -103,4 +103,58 @@ async fn tcp_send_recv_envelope() {
     let downcasted = deserialized.downcast_ref::<Ping>().unwrap();
 
     assert_eq!(downcasted.message, "Hello TCP!");
+}
+
+#[tokio::test]
+async fn remote_client_send_recv() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut conn = TcpConnection::new(stream);
+
+        //recv request
+        let request = conn.recv().await.unwrap();
+        assert_eq!(request.message_type, "test::Ping");
+        println!(
+            "Server received request from correlation id {}",
+            request.correlation_id
+        );
+
+        //send response with same id
+        let resp = Envelope {
+            message_type: "test::Pong".to_string(),
+            payload: b"Pong response".to_vec(),
+            correlation_id: request.correlation_id,
+            sender_node: "node-server".to_string(),
+            target_actor: request.sender_node.clone(),
+            is_response: true, //mark as response
+        };
+
+        conn.send(resp).await.unwrap();
+    });
+
+    //client task
+    let stream = TcpStream::connect(addr).await.unwrap();
+    let tcp_conn = TcpConnection::new(stream);
+    let client = RemoteClient::new(tcp_conn);
+
+    let request = Envelope {
+        message_type: "test::Ping".to_string(),
+        payload: b"ping data".to_vec(),
+        correlation_id: 42,
+        sender_node: "client".to_string(),
+        target_actor: "some_actor".to_string(),
+        is_response: false,
+    };
+
+    let response = client.send(request).await.unwrap();
+
+    assert_eq!(response.correlation_id, 42);
+    assert!(response.is_response);
+    assert_eq!(response.message_type, "test::Pong");
+    println!("Client got response: {:?}", response.message_type);
+
+    server.await.unwrap();
 }
