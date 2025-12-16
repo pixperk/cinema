@@ -1,6 +1,10 @@
 mod registry;
+mod tcp;
+mod transport;
 
 pub use registry::{deserialize_payload, register_message};
+pub use tcp::{EnvelopeCodec, TcpConnection, TcpTransport};
+pub use transport::{Connection, Transport, TransportError};
 
 use bytes::{Bytes, BytesMut};
 use prost::Message as ProstMessage;
