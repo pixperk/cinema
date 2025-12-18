@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use cinema::{
     remote::{
-        deserialize_payload, proto::Envelope, register_message, Connection, EnvelopeHandler,
-        RemoteAddr, RemoteClient, RemoteMessage, RemoteServer, TcpConnection, TcpTransport,
-        Transport,
+        deserialize_payload, make_handler, proto::Envelope, register_message, Connection,
+        EnvelopeHandler, RemoteAddr, RemoteClient, RemoteMessage, RemoteServer, TcpConnection,
+        TcpTransport, Transport,
     },
     Actor, ActorSystem, Context, Handler, Message,
 };
@@ -284,4 +284,77 @@ async fn remote_addr_to_actor() {
     let result = i32::from_be_bytes(response.payload.try_into().unwrap());
     assert_eq!(result, 5);
     println!("Remote actor returned: {}", result);
+}
+
+/// Test using make_handler helper - much cleaner than manual handler
+#[tokio::test]
+async fn make_handler_simplifies_setup() {
+    // Actor
+    struct Calculator {
+        value: i32,
+    }
+    impl Actor for Calculator {}
+
+    // Request message (protobuf)
+    #[derive(Clone, prost::Message)]
+    struct Add {
+        #[prost(int32, tag = "1")]
+        n: i32,
+    }
+    impl Message for Add {
+        type Result = AddResult; // Result must also be RemoteMessage
+    }
+    impl RemoteMessage for Add {
+        fn type_id() -> &'static str {
+            "test::Add"
+        }
+    }
+
+    // Response type (protobuf wrapper for the result)
+    #[derive(Clone, prost::Message)]
+    struct AddResult {
+        #[prost(int32, tag = "1")]
+        value: i32,
+    }
+    impl Message for AddResult {
+        type Result = ();
+    }
+    impl RemoteMessage for AddResult {
+        fn type_id() -> &'static str {
+            "test::AddResult"
+        }
+    }
+
+    impl Handler<Add> for Calculator {
+        fn handle(&mut self, msg: Add, _ctx: &mut Context<Self>) -> AddResult {
+            self.value += msg.n;
+            AddResult { value: self.value }
+        }
+    }
+
+    // Setup
+    let system = ActorSystem::new();
+    let calc_addr = system.spawn(Calculator { value: 10 });
+
+    // ONE LINE to create handler (vs 20 lines of boilerplate before)
+    let handler = make_handler::<Calculator, Add>(calc_addr.clone(), "calc-node");
+
+    // Start server
+    let server = RemoteServer::bind("127.0.0.1:0", handler).await.unwrap();
+    let server_addr = server.local_addr().unwrap();
+    tokio::spawn(server.run());
+    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+    // Client
+    let transport = TcpTransport;
+    let conn = transport.connect(&server_addr.to_string()).await.unwrap();
+    let client = RemoteClient::new(conn);
+    let remote: RemoteAddr<Calculator> = RemoteAddr::new("calc-node", "calculator", client);
+
+    let response = remote.send(Add { n: 5 }).await.unwrap();
+
+    // Decode protobuf result
+    let result = AddResult::decode(response.payload.as_slice()).unwrap();
+    assert_eq!(result.value, 15); // 10 + 5
+    println!("Calculator returned: {}", result.value);
 }

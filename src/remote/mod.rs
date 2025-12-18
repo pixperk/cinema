@@ -1,5 +1,6 @@
 mod addr;
 mod client;
+mod handler;
 mod registry;
 mod server;
 mod tcp;
@@ -7,6 +8,7 @@ mod transport;
 
 pub use addr::{NodeId, RemoteActorId, RemoteAddr};
 pub use client::RemoteClient;
+pub use handler::{make_handler, make_tell_handler, MessageRouter};
 pub use registry::{deserialize_payload, register_message};
 pub use server::{EnvelopeHandler, RemoteServer};
 pub use tcp::{EnvelopeCodec, TcpConnection, TcpTransport};
