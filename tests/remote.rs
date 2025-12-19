@@ -361,3 +361,76 @@ async fn make_handler_simplifies_setup() {
     assert_eq!(result.value, 15); // 10 + 5
     println!("Calculator returned: {}", result.value);
 }
+
+/// Test auto-derived client identity from TCP socket address
+#[tokio::test]
+async fn auto_derived_client_identity() {
+    // Same actor setup as make_handler_simplifies_setup
+    struct Calculator {
+        value: i32,
+    }
+    impl Actor for Calculator {}
+
+    #[derive(Clone, prost::Message)]
+    struct Add {
+        #[prost(int32, tag = "1")]
+        n: i32,
+    }
+    impl Message for Add {
+        type Result = AddResult;
+    }
+    impl RemoteMessage for Add {
+        fn type_id() -> &'static str {
+            "test::Add"
+        }
+    }
+
+    #[derive(Clone, prost::Message)]
+    struct AddResult {
+        #[prost(int32, tag = "1")]
+        value: i32,
+    }
+    impl Message for AddResult {
+        type Result = ();
+    }
+    impl RemoteMessage for AddResult {
+        fn type_id() -> &'static str {
+            "test::AddResult"
+        }
+    }
+
+    impl Handler<Add> for Calculator {
+        fn handle(&mut self, msg: Add, _ctx: &mut Context<Self>) -> AddResult {
+            self.value += msg.n;
+            AddResult { value: self.value }
+        }
+    }
+
+    let system = ActorSystem::new();
+    let calc_addr = system.spawn(Calculator { value: 100 });
+
+    let node = LocalNode::new("calc-server");
+    let handler = node.handler::<Calculator, Add>(calc_addr.clone());
+
+    let server = RemoteServer::bind("127.0.0.1:0", handler).await.unwrap();
+    let server_addr = server.local_addr().unwrap();
+    tokio::spawn(server.run());
+    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+    // Client - use auto-derived identity (no LocalNode needed!)
+    let transport = TcpTransport;
+    let conn = transport.connect(&server_addr.to_string()).await.unwrap();
+    let client = RemoteClient::new(conn);
+
+    // Check that local_addr is derived from socket
+    println!("Client local address: {}", client.local_addr());
+    assert!(client.local_addr().contains("127.0.0.1"));
+
+    // Create remote address using the simpler API
+    let remote: RemoteAddr<Calculator> = client.remote_addr("calc-server", "calculator");
+
+    let response = remote.send(Add { n: 7 }).await.unwrap();
+    let result = AddResult::decode(response.payload.as_slice()).unwrap();
+    assert_eq!(result.value, 107); // 100 + 7
+    println!("Auto-identity client got: {}", result.value);
+}

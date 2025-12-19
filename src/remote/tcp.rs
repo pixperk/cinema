@@ -60,12 +60,22 @@ impl Encoder<Envelope> for EnvelopeCodec {
 ///TCP connection wrapper
 pub struct TcpConnection {
     framed: Framed<TcpStream, EnvelopeCodec>,
+    local_addr: String,
 }
 
 impl TcpConnection {
     pub fn new(stream: TcpStream) -> Self {
+        let local_addr = stream
+            .local_addr()
+            .map(|a| a.to_string())
+            .unwrap_or_else(|_| "unknown".to_string());
         let framed = Framed::new(stream, EnvelopeCodec);
-        TcpConnection { framed }
+        TcpConnection { framed, local_addr }
+    }
+
+    /// Get the local socket address as a string
+    pub fn local_addr(&self) -> &str {
+        &self.local_addr
     }
 }
 

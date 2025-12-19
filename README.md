@@ -447,7 +447,7 @@ async fn main() {
 ### Client Side
 
 ```rust
-use cinema::remote::{LocalNode, RemoteClient, TcpTransport, Transport};
+use cinema::remote::{RemoteClient, TcpTransport, Transport};
 
 #[tokio::main]
 async fn main() {
@@ -456,9 +456,8 @@ async fn main() {
     let conn = transport.connect("127.0.0.1:8080").await.unwrap();
     let client = RemoteClient::new(conn);
 
-    // Create remote address
-    let node = LocalNode::new("client");
-    let remote = node.remote_addr::<Calculator>("calc-server", "calculator", client);
+    // Create remote address (identity auto-derived from socket)
+    let remote = client.remote_addr::<Calculator>("calc-server", "calculator");
 
     // Send message (same API as local!)
     let response = remote.send(Add { n: 5 }).await.unwrap();
@@ -468,6 +467,8 @@ async fn main() {
     println!("Result: {}", result.value);
 }
 ```
+
+> **Auto-derived identity:** `RemoteClient` captures the TCP socket's local address (e.g., `127.0.0.1:54321`) as its identity. Use `LocalNode` instead if you want meaningful names like `"order-service"`.
 
 ### Multiple Message Types
 
@@ -490,11 +491,9 @@ let server = RemoteServer::bind("0.0.0.0:8080", handler).await.unwrap();
 ```mermaid
 graph TB
     subgraph "Client Node"
-        LN1[LocalNode]
         RA[RemoteAddr]
         RC[RemoteClient]
-        LN1 -->|creates| RA
-        RA -->|uses| RC
+        RC -->|creates| RA
     end
 
     subgraph "Network"
@@ -523,7 +522,7 @@ graph TB
     H -->|responds via| TCP
     TCP -->|receives| RC
 
-    style LN1 fill:#4a9eff
+    style RC fill:#4a9eff
     style LN2 fill:#4a9eff
     style ACT fill:#22c55e
 ```

@@ -5,7 +5,7 @@ use tokio::{
     time::timeout,
 };
 
-use crate::remote::{proto::Envelope, Connection, TcpConnection, TransportError};
+use crate::remote::{proto::Envelope, Connection, RemoteAddr, TcpConnection, TransportError};
 
 ///a pending request waiting for a response
 type PendingRequest = oneshot::Sender<Result<Envelope, TransportError>>;
@@ -22,10 +22,12 @@ enum ClientCommand {
 #[derive(Clone)]
 pub struct RemoteClient {
     cmd_tx: mpsc::Sender<ClientCommand>,
+    local_addr: String,
 }
 
 impl RemoteClient {
     pub fn new(mut conn: TcpConnection) -> Self {
+        let local_addr = conn.local_addr().to_string();
         let (cmd_tx, mut cmd_rx) = mpsc::channel::<ClientCommand>(32);
         let pending_requests: Arc<Mutex<HashMap<u64, PendingRequest>>> =
             Arc::new(Mutex::new(HashMap::new()));
@@ -77,7 +79,17 @@ impl RemoteClient {
             }
         });
 
-        Self { cmd_tx }
+        Self { cmd_tx, local_addr }
+    }
+
+    /// Get the local socket address (auto-derived identity)
+    pub fn local_addr(&self) -> &str {
+        &self.local_addr
+    }
+
+    /// Create a remote address using auto-derived local identity
+    pub fn remote_addr<A>(&self, remote_node: &str, actor_name: &str) -> RemoteAddr<A> {
+        RemoteAddr::new(&self.local_addr, remote_node, actor_name, self.clone())
     }
 
     /// Fire-and-forget send
