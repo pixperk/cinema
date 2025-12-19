@@ -1,5 +1,6 @@
 mod addr;
 mod client;
+mod cluster;
 mod handler;
 mod registry;
 mod server;

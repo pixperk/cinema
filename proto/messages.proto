@@ -10,3 +10,19 @@ message Envelope{
     string target_actor = 5;
     bool is_response = 6;
 }
+
+message GossipMessage {
+    repeated NodeInfo members = 1;
+}
+
+message NodeInfo{
+    string id = 1;
+    string addr = 2;
+    NodeStatus status = 3;
+}
+
+enum NodeStatus {
+  UP = 0;
+  SUSPECT = 1;
+  DOWN = 2;
+}
