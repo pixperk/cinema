@@ -8,7 +8,7 @@ keywords = ["actor", "async", "concurrent", "distributed"]
 categories = ["concurrency", "asynchronous"]
 
 [workspace]
-members = ["examples/chat"]
+members = ["examples/chat", "examples/distributed-kv"]
 
 [dependencies]
 tokio = { version = "1", features = [

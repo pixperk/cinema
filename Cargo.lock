@@ -59,6 +59,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "distributed-kv"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "cinema",
+ "prost",
+ "prost-build",
+ "tokio",
+]
+
+[[package]]
 name = "either"
 version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

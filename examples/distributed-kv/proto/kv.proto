@@ -1,0 +1,33 @@
+syntax = "proto3";
+package kv;
+
+//request to get a value by key
+message GetRequest {
+    string key = 1;
+}
+
+//response with value or empty if not found
+message GetResponse {
+    optional string value = 1;
+}
+
+//request to set a key-value pair
+message SetRequest {
+    string key = 1;
+    string value = 2;
+}
+
+//confirmation of set operation
+message SetResponse {
+    bool success = 1;
+}
+
+//request to delete a key
+message DeleteRequest {
+    string key = 1;
+}
+
+//confirmation of delete operation
+message DeleteResponse {
+    bool deleted = 1;
+}
