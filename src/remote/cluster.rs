@@ -6,7 +6,8 @@ use std::{collections::HashMap, sync::Arc};
 
 use bytes::BytesMut;
 use prost::Message;
-use tokio::{net::TcpListener, sync::RwLock};
+use rand::seq::IteratorRandom;
+use tokio::{net::TcpListener, sync::RwLock, time::Duration};
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct Node {
@@ -176,6 +177,38 @@ impl ClusterNode {
         }
 
         Ok(())
+    }
+
+    /// Start periodic gossip to random peers
+    pub fn start_periodic_gossip(
+        self: Arc<Self>,
+        interval: Duration,
+    ) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(interval);
+
+            loop {
+                ticker.tick().await;
+
+                // Pick random peer (excluding self)
+                let peer = {
+                    let members = self.members.read().await;
+                    members
+                        .values()
+                        .filter(|n| n.id != self.local_node.id)
+                        .choose(&mut rand::rng())
+                        .cloned()
+                };
+
+                if let Some(peer) = peer {
+                    println!(
+                        "[{}] Periodic gossip to {}",
+                        self.local_node.id, peer.id
+                    );
+                    let _ = self.send_gossip_to(&peer).await;
+                }
+            }
+        })
     }
 }
 
