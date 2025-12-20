@@ -1,4 +1,11 @@
-use cinema::remote::cluster::{ClusterNode, Node, NodeStatus};
+use cinema::{
+    remote::{
+        cluster::{ClusterNode, Node, NodeStatus},
+        ClusterClient, LocalNode, MessageRouter,
+    },
+    Actor, ActorSystem, Context, Handler, Message,
+};
+use prost::Message as ProstMessage;
 
 #[tokio::test]
 async fn gossip_merges_membership() {
@@ -345,4 +352,128 @@ async fn actors_cleaned_up_when_node_goes_down() {
     assert_eq!(local_actor.unwrap().0, "node-1");
 
     println!("Actor cleanup verified: remote actor removed, local actor retained");
+}
+
+#[tokio::test]
+async fn cluster_remote_communication() {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    //define ping/pong messages
+    #[derive(Clone, ProstMessage)]
+    struct Ping {
+        #[prost(string, tag = "1")]
+        msg: String,
+    }
+    impl Message for Ping {
+        type Result = Pong;
+    }
+    impl cinema::remote::RemoteMessage for Ping {}
+
+    #[derive(Clone, ProstMessage)]
+    struct Pong {
+        #[prost(string, tag = "1")]
+        reply: String,
+    }
+    impl Message for Pong {
+        type Result = ();
+    }
+    impl cinema::remote::RemoteMessage for Pong {}
+
+    //pingpong actor
+    struct PingPong;
+    impl Actor for PingPong {}
+    impl Handler<Ping> for PingPong {
+        fn handle(&mut self, msg: Ping, _ctx: &mut Context<Self>) -> Pong {
+            println!("pingpong received: {}", msg.msg);
+            Pong {
+                reply: format!("pong: {}", msg.msg),
+            }
+        }
+    }
+
+    //create 2 cluster nodes
+    let node1 = Arc::new(ClusterNode::new(
+        "node-1".to_string(),
+        "127.0.0.1:9701".to_string(),
+    ));
+    let node2 = Arc::new(ClusterNode::new(
+        "node-2".to_string(),
+        "127.0.0.1:9702".to_string(),
+    ));
+
+    //start actor system and spawn pingpong on node2
+    let system = ActorSystem::new();
+    let pingpong_addr = system.spawn(PingPong);
+
+    //register actor on node2
+    node2
+        .register_actor("pingpong".to_string(), "PingPong".to_string())
+        .await;
+
+    //create handler for node2
+    let local_node2 = LocalNode::new("node-2");
+    let handler = MessageRouter::new()
+        .route::<Ping>(local_node2.handler::<PingPong, Ping>(pingpong_addr.clone()))
+        .build();
+
+    //start cluster servers with actor handling
+    tokio::spawn(node1.clone().start_server(9701, None));
+    tokio::spawn(node2.clone().start_server(9702, Some(handler)));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    //connect nodes via gossip
+    node1
+        .add_member(Node {
+            id: "node-2".to_string(),
+            addr: "127.0.0.1:9702".to_string(),
+            status: NodeStatus::Up,
+        })
+        .await;
+
+    //start periodic gossip to spread actor registry
+    let _handle1 = node1
+        .clone()
+        .start_periodic_gossip(Duration::from_millis(100), Duration::from_secs(10));
+    let _handle2 = node2
+        .clone()
+        .start_periodic_gossip(Duration::from_millis(100), Duration::from_secs(10));
+
+    //wait for gossip to spread
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    //verify node1 knows about the actor
+    let location = node1.lookup_actor("pingpong").await;
+    assert!(
+        location.is_some(),
+        "node1 should know about pingpong actor via gossip"
+    );
+    let (node_id, actor_type) = location.unwrap();
+    assert_eq!(node_id, "node-2");
+    assert_eq!(actor_type, "PingPong");
+
+    //create cluster client on node1
+    let client = ClusterClient::new(node1.clone());
+    let remote: cinema::remote::ClusterRemoteAddr<PingPong> = client.remote_addr("pingpong");
+
+    //test low-level send (returns envelope)
+    let response = remote
+        .send(Ping {
+            msg: "hello cluster".to_string(),
+        })
+        .await
+        .expect("send should succeed");
+    let pong = Pong::decode(response.payload.as_slice()).unwrap();
+    assert_eq!(pong.reply, "pong: hello cluster");
+    println!("low-level send successful: {}", pong.reply);
+
+    //test high-level call (returns typed response)
+    let pong = remote
+        .call(Ping {
+            msg: "hello typed".to_string(),
+        })
+        .await
+        .expect("call should succeed");
+    assert_eq!(pong.reply, "pong: hello typed");
+    println!("high-level call successful: {}", pong.reply);
 }

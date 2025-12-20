@@ -12,7 +12,7 @@ A lightweight actor model framework for Rust, inspired by Erlang/OTP, Akka, and 
 - **Registry** - Name-based actor lookup with auto-cleanup
 - **Async handlers** - Non-blocking I/O in message handlers
 - **Remote actors** - TCP transport with Protocol Buffers serialization
-- **Cluster gossip** - Gossip protocol for membership sharing across nodes
+- **Cluster** - Gossip protocol for membership, failure detection, and distributed actor registry
 
 ## Design Philosophy
 
@@ -27,84 +27,43 @@ If you want OTP-style fault tolerance in Rust, use Cinema.
 
 > **Note on panics:** Cinema treats panics inside actors as failures, similar to Erlang process crashes. Panics are caught at actor boundaries and never crash the runtime.
 
-## Context API
+---
 
-`Context<Self>` is the actor's handle to the runtime:
+## Table of Contents
 
-| Method | Description |
-|--------|-------------|
-| `spawn_child(actor)` | Spawn supervised child |
-| `spawn_child_with_strategy(factory, strategy)` | Spawn with restart policy |
-| `stop()` | Stop this actor |
-| `address()` | Get own `Addr<Self>` |
-| `run_later(duration, msg)` | Delayed self-message |
-| `run_interval(duration, msg)` | Periodic self-message |
-| `add_stream(stream)` | Attach async stream |
-| `watch(addr)` | Get notified when actor dies |
+1. [Quick Start](#quick-start)
+2. [Core Concepts](#core-concepts)
+   - [Context API](#context-api)
+   - [Supervision](#supervision)
+   - [Streams](#streams)
+   - [Registry](#registry)
+3. [Remote Actors](#remote-actors)
+   - [Basic Remote Messaging](#basic-remote-messaging)
+   - [Message Router](#message-router)
+4. [Cluster](#cluster)
+   - [Gossip Protocol](#gossip-protocol)
+   - [Failure Detection](#failure-detection)
+   - [Distributed Actor Registry](#distributed-actor-registry)
+   - [Cluster-Aware Remote Communication](#cluster-aware-remote-communication)
+5. [Examples](#examples)
+6. [Architecture](#architecture)
+7. [License](#license)
 
-## Architecture
-
-```mermaid
-graph TB
-    subgraph ActorSystem
-        AS[ActorSystem]
-        REG[Registry]
-        AS --> REG
-    end
-
-    subgraph Actors
-        A1[Actor A]
-        A2[Actor B]
-        A3[Actor C]
-    end
-
-    AS -->|spawn| A1
-    AS -->|spawn| A2
-    A1 -->|spawn_child| A3
-
-    subgraph "Message Flow"
-        M1[Message]
-        MB1[Mailbox]
-        H1[Handler]
-    end
-
-    M1 -->|do_send/send| MB1
-    MB1 -->|deliver| H1
-```
-
-## Supervision Tree
-
-```mermaid
-graph TD
-    P[Parent Actor]
-    C1[Child 1]
-    C2[Child 2]
-    C3[Child 3]
-
-    P -->|supervises| C1
-    P -->|supervises| C2
-    P -->|supervises| C3
-
-    C1 -.->|panic| P
-    P -->|Restart/Stop/Escalate| C1
-
-    style P fill:#4a9eff
-    style C1 fill:#ff6b6b
-```
+---
 
 ## Quick Start
 
 ```rust
 use cinema::{Actor, Handler, Message, ActorSystem, Context};
 
-// Define a message
+// define a message
 struct Greet(String);
 
 impl Message for Greet {
     type Result = String;
 }
 
-// Define an actor
+// define an actor
 struct Greeter;
 
 impl Actor for Greeter {}
@@ -120,16 +79,35 @@ async fn main() {
     let system = ActorSystem::new();
     let addr = system.spawn(Greeter);
 
-    // Fire and forget
+    // fire and forget
     addr.do_send(Greet("World".into()));
 
-    // Request-response
+    // request-response
     let response = addr.send(Greet("Cinema".into())).await.unwrap();
     println!("{}", response); // "Hello, Cinema!"
 }
 ```
 
-## Supervision
+---
+
+## Core Concepts
+
+### Context API
+
+`Context<Self>` is the actor's handle to the runtime:
+
+| Method | Description |
+|--------|-------------|
+| `spawn_child(actor)` | Spawn supervised child |
+| `spawn_child_with_strategy(factory, strategy)` | Spawn with restart policy |
+| `stop()` | Stop this actor |
+| `address()` | Get own `Addr<Self>` |
+| `run_later(duration, msg)` | Delayed self-message |
+| `run_interval(duration, msg)` | Periodic self-message |
+| `add_stream(stream)` | Attach async stream |
+| `watch(addr)` | Get notified when actor dies |
+
+### Supervision
 
 ```rust
 use cinema::{Actor, Context, SupervisorStrategy};
@@ -140,7 +118,7 @@ struct Child;
 
 impl Actor for Parent {
     fn started(&mut self, ctx: &mut Context<Self>) {
-        // Restart child up to 3 times within 10 seconds
+        // restart child up to 3 times within 10 seconds
         ctx.spawn_child_with_strategy(
             || Child,
             SupervisorStrategy::restart(3, Duration::from_secs(10)),
@@ -156,55 +134,7 @@ impl Actor for Child {}
 - `Restart { max_restarts, within }` - Restart on panic, up to N times within duration
 - `Escalate` - Propagate failure to parent (OTP-style)
 
-### Escalate (OTP-style failure propagation)
-
-```mermaid
-graph TD
-    G[Grandparent]
-    P[Parent]
-    C[Child]
-
-    G -->|"Restart(3, 10s)"| P
-    P -->|Escalate| C
-
-    C -.->|panic!| P
-    P -.->|escalates| G
-    G -->|restarts| P
-
-    style C fill:#ff6b6b
-    style P fill:#fbbf24
-    style G fill:#22c55e
-```
-
-```rust
-impl Actor for Grandparent {
-    fn started(&mut self, ctx: &mut Context<Self>) {
-        // Grandparent restarts Parent on failure
-        ctx.spawn_child_with_strategy(
-            || Parent,
-            SupervisorStrategy::restart(3, Duration::from_secs(10)),
-        );
-    }
-}
-
-impl Actor for Parent {
-    fn started(&mut self, ctx: &mut Context<Self>) {
-        // Parent escalates Child failures to Grandparent
-        ctx.spawn_child_with_strategy(
-            || Child,
-            SupervisorStrategy::Escalate,
-        );
-    }
-}
-
-impl Actor for Child {
-    fn started(&mut self, _ctx: &mut Context<Self>) {
-        panic!("Child crashes!"); // Parent escalates -> Grandparent restarts Parent
-    }
-}
-```
-
-## Streams
+### Streams
 
 ```rust
 use cinema::{Actor, StreamHandler, Context};
@@ -233,16 +163,16 @@ impl StreamHandler<i32> for MyActor {
 }
 ```
 
-## Registry
+### Registry
 
 ```rust
 let system = ActorSystem::new();
 let addr = system.spawn(MyActor);
 
-// Register with auto-unregister on actor death
+// register with auto-unregister on actor death
 system.register("my_actor", addr);
 
-// Lookup
+// lookup
 if let Some(addr) = system.lookup::<MyActor>("my_actor") {
     addr.do_send(SomeMessage);
 }
@@ -250,18 +180,302 @@ if let Some(addr) = system.lookup::<MyActor>("my_actor") {
 
 > **Failure semantics:** Registry entries are automatically removed when actors stop. During restarts, the same `Addr` remains valid - senders don't need to re-lookup.
 
-## CRUD Example
+---
+
+## Remote Actors
+
+Cinema supports sending messages to actors on other nodes over TCP with Protocol Buffers serialization.
+
+### Basic Remote Messaging
+
+**Define messages** (protobuf serializable):
+
+```rust
+use cinema::{Message, remote::RemoteMessage};
+use prost::Message as ProstMessage;
+
+// request message
+#[derive(Clone, ProstMessage)]
+struct Add {
+    #[prost(int32, tag = "1")]
+    n: i32,
+}
+impl Message for Add {
+    type Result = AddResult;
+}
+impl RemoteMessage for Add {}
+
+// response message
+#[derive(Clone, ProstMessage)]
+struct AddResult {
+    #[prost(int32, tag = "1")]
+    value: i32,
+}
+impl Message for AddResult {
+    type Result = ();
+}
+impl RemoteMessage for AddResult {}
+```
+
+**Server side:**
+
+```rust
+use cinema::{Actor, Handler, ActorSystem, Context};
+use cinema::remote::{LocalNode, RemoteServer};
+
+struct Calculator { value: i32 }
+
+impl Actor for Calculator {}
+
+impl Handler<Add> for Calculator {
+    fn handle(&mut self, msg: Add, _ctx: &mut Context<Self>) -> AddResult {
+        self.value += msg.n;
+        AddResult { value: self.value }
+    }
+}
+
+#[tokio::main]
+async fn main() {
+    let system = ActorSystem::new();
+    let calc = system.spawn(Calculator { value: 0 });
+
+    let node = LocalNode::new("calc-server");
+    let handler = node.handler::<Calculator, Add>(calc);
+
+    let server = RemoteServer::bind("0.0.0.0:8080", handler).await.unwrap();
+    server.run().await;
+}
+```
+
+**Client side:**
+
+```rust
+use cinema::remote::{RemoteClient, TcpTransport, Transport};
+
+#[tokio::main]
+async fn main() {
+    let transport = TcpTransport;
+    let conn = transport.connect("127.0.0.1:8080").await.unwrap();
+    let client = RemoteClient::new(conn);
+
+    let remote = client.remote_addr::<Calculator>("calc-server", "calculator");
+
+    let response = remote.send(Add { n: 5 }).await.unwrap();
+    let result = AddResult::decode(response.payload.as_slice()).unwrap();
+    println!("Result: {}", result.value);
+}
+```
+
+### Message Router
+
+Handle multiple message types:
+
+```rust
+use cinema::remote::MessageRouter;
+
+let handler = MessageRouter::new()
+    .route::<Add>(node.handler::<Calculator, Add>(calc.clone()))
+    .route::<Subtract>(node.handler::<Calculator, Subtract>(calc.clone()))
+    .route::<GetValue>(node.handler::<Calculator, GetValue>(calc))
+    .build();
+
+let server = RemoteServer::bind("0.0.0.0:8080", handler).await.unwrap();
+```
+
+---
+
+## Cluster
+
+Cinema provides a gossip-based cluster with:
+- **Membership management** - Track which nodes are in the cluster
+- **Failure detection** - Mark nodes as SUSPECT/DOWN based on heartbeat
+- **Distributed actor registry** - Discover which node hosts an actor
+- **Location-transparent messaging** - Send to actors by name, not node address
+
+### Gossip Protocol
+
+Nodes exchange membership information to achieve eventual consistency:
+
+```rust
+use cinema::remote::cluster::{ClusterNode, Node, NodeStatus};
+use std::sync::Arc;
+use std::time::Duration;
+
+#[tokio::main]
+async fn main() {
+    // create cluster node
+    let node1 = Arc::new(ClusterNode::new(
+        "node-1".to_string(),
+        "127.0.0.1:7001".to_string(),
+    ));
+
+    // start gossip server
+    tokio::spawn(node1.clone().start_gossip_server(7001));
+
+    // add peer and start periodic gossip
+    node1.add_member(Node {
+        id: "node-2".to_string(),
+        addr: "127.0.0.1:7002".to_string(),
+        status: NodeStatus::Up,
+    }).await;
+
+    // gossip every 100ms, mark suspect after 5s
+    node1.clone().start_periodic_gossip(
+        Duration::from_millis(100),
+        Duration::from_secs(5),
+    );
+
+    // after multiple rounds, all nodes converge to same membership view
+}
+```
+
+### Failure Detection
+
+Nodes track heartbeat timestamps and mark unresponsive nodes:
+
+- **Up** → **Suspect** after `suspect_timeout`
+- **Suspect** → **Down** after `suspect_timeout * 2`
+
+```rust
+// node becomes SUSPECT if no gossip for 5s
+// node becomes DOWN if no gossip for 10s
+node.start_periodic_gossip(
+    Duration::from_millis(100),
+    Duration::from_secs(5),
+);
+```
+
+### Distributed Actor Registry
+
+Actors register on their local node, and their location spreads via gossip:
+
+```rust
+// node2 registers an actor
+node2.register_actor("user-store".to_string(), "UserStore".to_string()).await;
+
+// after gossip propagates, node1 can lookup the actor
+let location = node1.lookup_actor("user-store").await;
+// Some(("node-2", "UserStore"))
+```
+
+**Actor cleanup:** When a node goes DOWN, all its actors are removed from the registry.
+
+### Cluster-Aware Remote Communication
+
+`ClusterClient` combines cluster discovery with remote messaging:
+
+**Server setup:**
+
+```rust
+use cinema::{Actor, Handler, ActorSystem, Context};
+use cinema::remote::{LocalNode, MessageRouter};
+use cinema::remote::cluster::ClusterNode;
+use std::sync::Arc;
+
+// actor
+struct PingPong;
+impl Actor for PingPong {}
+
+#[derive(Clone, prost::Message)]
+struct Ping { #[prost(string, tag = "1")] msg: String }
+impl Message for Ping { type Result = Pong; }
+impl RemoteMessage for Ping {}
+
+#[derive(Clone, prost::Message)]
+struct Pong { #[prost(string, tag = "1")] reply: String }
+impl Message for Pong { type Result = (); }
+impl RemoteMessage for Pong {}
+
+impl Handler<Ping> for PingPong {
+    fn handle(&mut self, msg: Ping, _ctx: &mut Context<Self>) -> Pong {
+        Pong { reply: format!("pong: {}", msg.msg) }
+    }
+}
+
+#[tokio::main]
+async fn main() {
+    let system = ActorSystem::new();
+    let actor = system.spawn(PingPong);
+
+    // create cluster node
+    let node = Arc::new(ClusterNode::new(
+        "node-2".to_string(),
+        "127.0.0.1:9002".to_string(),
+    ));
+
+    // register actor in cluster
+    node.register_actor("pingpong".to_string(), "PingPong".to_string()).await;
+
+    // create handler
+    let local_node = LocalNode::new("node-2");
+    let handler = MessageRouter::new()
+        .route::<Ping>(local_node.handler::<PingPong, Ping>(actor))
+        .build();
+
+    // start unified server (gossip + actor messages)
+    tokio::spawn(node.clone().start_server(9002, Some(handler)));
+
+    // start periodic gossip
+    node.clone().start_periodic_gossip(
+        Duration::from_millis(100),
+        Duration::from_secs(10),
+    );
+}
+```
+
+**Client usage:**
+
+```rust
+use cinema::remote::{ClusterClient, ClusterRemoteAddr};
+
+// create cluster client
+let client = ClusterClient::new(node1.clone());
+
+// create typed remote address (no manual node lookup needed!)
+let remote: ClusterRemoteAddr<PingPong> = client.remote_addr("pingpong");
+
+// option 1: low-level send (returns envelope)
+let envelope = remote.send(Ping { msg: "hello" }).await?;
+let pong = Pong::decode(envelope.payload.as_slice())?;
+
+// option 2: high-level call (auto-decodes response) ⭐
+let pong: Pong = remote.call(Ping { msg: "hello" }).await?;
+println!("{}", pong.reply); // "pong: hello"
+
+// option 3: fire-and-forget
+remote.do_send(Ping { msg: "notify" }).await?;
+```
+
+**How it works:**
+
+1. `remote.call(Ping { ... })` looks up "pingpong" in cluster registry → finds node-2
+2. Gets/creates RemoteClient connection to node-2
+3. Wraps message in ClusterMessage (multiplexed protocol)
+4. Sends with correlation ID tracking for concurrent requests
+5. Receives response and auto-decodes to typed `Pong`
+
+**Features:**
+
+- ✅ **Location transparency** - send by actor name, not node address
+- ✅ **Automatic discovery** - cluster registry finds the actor's node
+- ✅ **Connection pooling** - reuses connections per node
+- ✅ **Concurrent requests** - multiple requests multiplexed over one connection
+- ✅ **Type-safe API** - compile-time checked request/response types
+- ✅ **Error recovery** - failed connections auto-removed and recreated
+
+---
+
+## Examples
+
+### CRUD Example
 
 A simple in-memory user store - **no locks needed!**
-
-> The actor processes one message at a time, so state is naturally protected without `Mutex` or `RwLock`.
 
 ```rust
 use cinema::{Actor, Handler, Message, ActorSystem, Context};
 use std::collections::HashMap;
 
-// ---- Messages ----
-
+// messages
 struct CreateUser { id: u64, name: String }
 struct GetUser { id: u64 }
 struct UpdateUser { id: u64, name: String }
@@ -272,8 +486,7 @@ impl Message for GetUser { type Result = Option<String>; }
 impl Message for UpdateUser { type Result = bool; }
 impl Message for DeleteUser { type Result = bool; }
 
-// ---- Actor ----
-
+// actor
 struct UserStore {
     users: HashMap<u64, String>,
 }
@@ -308,34 +521,11 @@ impl Handler<DeleteUser> for UserStore {
         self.users.remove(&msg.id).is_some()
     }
 }
-
-// ---- Usage ----
-
-#[tokio::main]
-async fn main() {
-    let system = ActorSystem::new();
-    let store = system.spawn(UserStore { users: HashMap::new() });
-
-    // Create
-    store.do_send(CreateUser { id: 1, name: "Alice".into() });
-
-    // Read
-    let user = store.send(GetUser { id: 1 }).await.unwrap();
-    println!("{:?}", user); // Some("Alice")
-
-    // Update
-    let updated = store.send(UpdateUser { id: 1, name: "Alicia".into() }).await.unwrap();
-    println!("{}", updated); // true
-
-    // Delete
-    let deleted = store.send(DeleteUser { id: 1 }).await.unwrap();
-    println!("{}", deleted); // true
-}
 ```
 
-## Examples
+### TCP Chat Server
 
-Run the TCP chat server example:
+Run the chat server example:
 
 ```bash
 cargo run -p chat
@@ -347,139 +537,41 @@ Connect with netcat:
 nc localhost 8080
 ```
 
-## Remote Actors
+---
 
-Cinema supports sending messages to actors on other nodes over TCP with Protocol Buffers serialization.
+## Architecture
 
-### How It Works
+### Local Actor System
 
 ```mermaid
-sequenceDiagram
-    participant C as Client Node
-    participant N as Network (TCP)
-    participant S as Server Node
-    participant A as Actor
+graph TB
+    subgraph ActorSystem
+        AS[ActorSystem]
+        REG[Registry]
+        AS --> REG
+    end
 
-    C->>C: Encode message (protobuf)
-    C->>N: Send Envelope
-    N->>S: Receive Envelope
-    S->>S: Decode message
-    S->>A: addr.send(msg).await
-    A->>S: Return result
-    S->>S: Encode result (protobuf)
-    S->>N: Send Response Envelope
-    N->>C: Receive Response
-    C->>C: Decode result
+    subgraph Actors
+        A1[Actor A]
+        A2[Actor B]
+        A3[Actor C]
+    end
+
+    AS -->|spawn| A1
+    AS -->|spawn| A2
+    A1 -->|spawn_child| A3
+
+    subgraph "Message Flow"
+        M1[Message]
+        MB1[Mailbox]
+        H1[Handler]
+    end
+
+    M1 -->|do_send/send| MB1
+    MB1 -->|deliver| H1
 ```
 
-### Define Remote Messages
-
-Messages must implement `RemoteMessage` (protobuf serializable). The `type_id` is auto-derived from Rust's type name:
-
-```rust
-use cinema::{Message, remote::RemoteMessage};
-use prost::Message as ProstMessage;
-
-// Request message
-#[derive(Clone, ProstMessage)]
-struct Add {
-    #[prost(int32, tag = "1")]
-    n: i32,
-}
-impl Message for Add {
-    type Result = AddResult;  // Result must also be RemoteMessage
-}
-impl RemoteMessage for Add {}  // type_id auto-derived!
-
-// Response message
-#[derive(Clone, ProstMessage)]
-struct AddResult {
-    #[prost(int32, tag = "1")]
-    value: i32,
-}
-impl Message for AddResult {
-    type Result = ();
-}
-impl RemoteMessage for AddResult {}  // type_id auto-derived!
-```
-
-### Server Side
-
-```rust
-use cinema::{Actor, Handler, ActorSystem, Context};
-use cinema::remote::{LocalNode, RemoteServer, TcpTransport};
-
-struct Calculator { value: i32 }
-
-impl Actor for Calculator {}
-
-impl Handler<Add> for Calculator {
-    fn handle(&mut self, msg: Add, _ctx: &mut Context<Self>) -> AddResult {
-        self.value += msg.n;
-        AddResult { value: self.value }
-    }
-}
-
-#[tokio::main]
-async fn main() {
-    let system = ActorSystem::new();
-    let calc = system.spawn(Calculator { value: 0 });
-
-    // Configure node identity
-    let node = LocalNode::new("calc-server");
-
-    // Create handler (1 line vs 20 lines of boilerplate)
-    let handler = node.handler::<Calculator, Add>(calc);
-
-    // Start server
-    let server = RemoteServer::bind("0.0.0.0:8080", handler).await.unwrap();
-    server.run().await;
-}
-```
-
-### Client Side
-
-```rust
-use cinema::remote::{RemoteClient, TcpTransport, Transport};
-
-#[tokio::main]
-async fn main() {
-    // Connect to server
-    let transport = TcpTransport;
-    let conn = transport.connect("127.0.0.1:8080").await.unwrap();
-    let client = RemoteClient::new(conn);
-
-    // Create remote address (identity auto-derived from socket)
-    let remote = client.remote_addr::<Calculator>("calc-server", "calculator");
-
-    // Send message (same API as local!)
-    let response = remote.send(Add { n: 5 }).await.unwrap();
-
-    // Decode response
-    let result = AddResult::decode(response.payload.as_slice()).unwrap();
-    println!("Result: {}", result.value);
-}
-```
-
-> **Auto-derived identity:** `RemoteClient` captures the TCP socket's local address (e.g., `127.0.0.1:54321`) as its identity. Use `LocalNode` instead if you want meaningful names like `"order-service"`.
-
-### Multiple Message Types
-
-Use `MessageRouter` to handle different message types:
-
-```rust
-use cinema::remote::MessageRouter;
-
-let handler = MessageRouter::new()
-    .route::<Add>(node.handler::<Calculator, Add>(calc.clone()))
-    .route::<Subtract>(node.handler::<Calculator, Subtract>(calc.clone()))
-    .route::<GetValue>(node.handler::<Calculator, GetValue>(calc))
-    .build();
-
-let server = RemoteServer::bind("0.0.0.0:8080", handler).await.unwrap();
-```
-
-### Architecture
+### Remote Messaging
 
 ```mermaid
 graph TB
@@ -520,138 +612,92 @@ graph TB
     style ACT fill:#22c55e
 ```
 
-## Roadmap
-
-```mermaid
-graph LR
-    subgraph Done
-        A[Core Actors]
-        B[Supervision]
-        C[Streams]
-        D[Registry]
-        E[Serialization]
-        F[Transport Layer]
-        G[Remote Actors]
-    end
-
-    subgraph "Coming Soon"
-        H[Cluster Discovery]
-    end
-
-    A --> B --> C --> D --> E --> F --> G --> H
-
-    style A fill:#22c55e
-    style B fill:#22c55e
-    style C fill:#22c55e
-    style D fill:#22c55e
-    style E fill:#22c55e
-    style F fill:#22c55e
-    style G fill:#22c55e
-    style H fill:#fbbf24
-```
-
-## Cluster Gossip
-
-Cinema uses a gossip protocol for cluster membership. Nodes exchange their view of the cluster to achieve eventual consistency.
-
-### How It Works
-
-Each node maintains:
-- **Local node** - Its own identity (id + address + status)
-- **Member list** - Known cluster members in `Arc<RwLock<HashMap>>`
-
-Gossip happens bidirectionally:
-1. **Gossip server** - Listens on a port, receives membership from peers, replies with own membership
-2. **Gossip client** - Connects to peer, sends membership, receives response
-
-Both sides merge received gossip via `merge_gossip()`, which uses `HashMap::entry().and_modify().or_insert()` to track the latest node information.
-
-### Example
-
-```rust
-use cinema::remote::cluster::{ClusterNode, Node, NodeStatus};
-use std::sync::Arc;
-
-#[tokio::main]
-async fn main() {
-    // Create cluster node
-    let node = Arc::new(ClusterNode::new(Node {
-        id: "node1".into(),
-        addr: "127.0.0.1:7001".into(),
-        status: NodeStatus::Up,
-    }));
-
-    // Start gossip server
-    tokio::spawn(node.clone().start_gossip_server(9001));
-
-    // Gossip to a peer
-    let peer = Node {
-        id: "node2".into(),
-        addr: "127.0.0.1:7002".into(),
-        status: NodeStatus::Up,
-    };
-    node.send_gossip_to(&peer).await.ok();
-
-    // After multiple rounds, all nodes converge to same membership view
-}
-```
-
-### Architecture
-
-```mermaid
-sequenceDiagram
-    participant N1 as Node 1
-    participant N2 as Node 2
-    participant N3 as Node 3
-
-    N1->>N2: GossipMessage [N1, N3]
-    N2->>N1: GossipMessage [N1, N2, N3]
-    N1->>N1: merge_gossip()
-
-    N2->>N3: GossipMessage [N1, N2, N3]
-    N3->>N2: GossipMessage [N2, N3]
-    N2->>N2: merge_gossip()
-
-    Note over N1,N3: After 2 rounds, all nodes know about each other
-```
-
-**Non-goals** (by design):
-- Global ordering guarantees
-- Exactly-once delivery
-- Transparent shared state
-
-Cinema follows Erlang's philosophy: let it crash, retry, and reconcile.
-
-### Coming Soon
-
-- **Failure Detection** - Heartbeat-based node health monitoring
-- **Distributed Registry** - Lookup actors across the cluster
-- **Periodic Gossip Loop** - Automatic background gossip every N seconds
+### Cluster Architecture
 
 ```mermaid
 graph TB
-    subgraph "Node A"
-        A1[Actor 1]
-        A2[Actor 2]
+    subgraph "Node 1"
+        CN1[ClusterNode]
+        CC1[ClusterClient]
+        A1[Actor A]
+
+        CN1 -->|provides registry| CC1
+        CC1 -->|sends to| A1
     end
 
-    subgraph "Node B"
-        B1[Actor 3]
-        B2[Actor 4]
+    subgraph "Node 2"
+        CN2[ClusterNode]
+        A2[Actor B]
+        A3[Actor C]
+
+        CN2 -->|hosts| A2
+        CN2 -->|hosts| A3
     end
 
-    subgraph "Node C"
-        C1[Actor 5]
+    subgraph "Node 3"
+        CN3[ClusterNode]
+        A4[Actor D]
+
+        CN3 -->|hosts| A4
     end
 
-    A1 <-->|TCP| B1
-    B1 <-->|TCP| C1
-    A2 <-->|TCP| C1
+    CN1 <-->|gossip| CN2
+    CN2 <-->|gossip| CN3
+    CN1 <-->|gossip| CN3
 
-    style A1 fill:#4a9eff
-    style B1 fill:#4a9eff
-    style C1 fill:#4a9eff
+    CC1 -.->|"1. lookup 'ActorB'"| CN1
+    CN1 -.->|"2. node-2"| CC1
+    CC1 ==>|"3. send msg"| A2
+
+    style CN1 fill:#4a9eff
+    style CN2 fill:#4a9eff
+    style CN3 fill:#4a9eff
+    style CC1 fill:#22c55e
 ```
+
+**Multiplexed Protocol:**
+
+```mermaid
+graph LR
+    subgraph "ClusterMessage (oneof)"
+        G[Gossip]
+        E[Envelope<br/>Actor Message]
+    end
+
+    subgraph "Single Port"
+        S[Server]
+    end
+
+    G -->|route to| S
+    E -->|route to| S
+
+    S -->|gossip handler| M[Membership Merge]
+    S -->|actor handler| A[Actor Dispatch]
+
+    style G fill:#fbbf24
+    style E fill:#22c55e
+```
+
+---
+
+## Roadmap
+
+- [x] Core Actors
+- [x] Supervision
+- [x] Streams
+- [x] Registry
+- [x] Remote Actors
+- [x] Cluster Gossip
+- [x] Failure Detection
+- [x] Distributed Actor Registry
+- [x] Cluster-Aware Messaging
+
+**Coming Soon:**
+- [ ] Cluster sharding
+- [ ] Persistent actors (event sourcing)
+- [ ] Distributed sagas
+
+---
 
 ## License
 

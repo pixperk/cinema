@@ -1,12 +1,20 @@
 syntax = "proto3";
 package cinema;
 
+///multiplexed message wrapper for cluster protocol
+message ClusterMessage {
+    oneof payload {
+        Envelope envelope = 1;
+        GossipMessage gossip = 2;
+    }
+}
+
 //envelope is a wrapper for all remote messages
 message Envelope{
     string message_type = 1; //eg : mycrate::MyMessage
     bytes payload = 2;
     uint64 correlation_id = 3; //request-response correlation
-    string sender_node = 4; 
+    string sender_node = 4;
     string target_actor = 5;
     bool is_response = 6;
 }

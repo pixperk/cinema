@@ -8,7 +8,7 @@ use crate::remote::{proto::Envelope, RemoteClient, RemoteMessage, TransportError
 ///global correlation id counter
 static CORRELATION_ID: AtomicU64 = AtomicU64::new(1);
 
-fn next_correlation_id() -> u64 {
+pub(crate) fn next_correlation_id() -> u64 {
     CORRELATION_ID.fetch_add(1, Ordering::Relaxed)
 }
 

@@ -1,6 +1,7 @@
 mod addr;
 mod client;
 pub mod cluster;
+mod cluster_client;
 mod handler;
 mod registry;
 mod server;
@@ -9,6 +10,7 @@ mod transport;
 
 pub use addr::{NodeId, RemoteActorId, RemoteAddr};
 pub use client::RemoteClient;
+pub use cluster_client::{ClusterClient, ClusterRemoteAddr};
 pub use handler::{make_handler, make_tell_handler, LocalNode, MessageRouter};
 pub use registry::{deserialize_payload, register_message};
 pub use server::{EnvelopeHandler, RemoteServer};
