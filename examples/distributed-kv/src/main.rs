@@ -62,11 +62,12 @@ async fn main() {
     //join existing cluster if seed provided
     if let Some(seed) = seed_addr {
         println!("joining cluster via seed: {}", seed);
-        cluster.add_member(cinema::remote::cluster::Node {
-            id: format!("seed-{}", seed),
+        let seed_node = cinema::remote::cluster::Node {
+            id: "temp-seed".to_string(),
             addr: seed.to_string(),
             status: cinema::remote::cluster::NodeStatus::Up,
-        }).await;
+        };
+        let _ = cluster.send_gossip_to(&seed_node).await;
     }
 
     //start periodic gossip
