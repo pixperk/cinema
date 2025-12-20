@@ -113,7 +113,7 @@ impl ClusterNode {
         }
     }
 
-    pub async fn merge_gossip(&self, gossip: GossipMessage) {
+    pub async fn merge_gossip(&self, gossip: GossipMessage, sender_node_id: &str) {
         let mut members = self.members.write().await;
         let mut heartbeats = self.last_heartbeat.write().await;
 
@@ -129,10 +129,10 @@ impl ClusterNode {
                     }
                 })
                 .or_insert(node.clone());
-
-            // Update heartbeat time
-            heartbeats.insert(node.id, Instant::now());
         }
+
+        // only update heartbeat for the actual sender, not all nodes in gossip
+        heartbeats.insert(sender_node_id.to_string(), Instant::now());
 
         // Merge actor locations
         let mut registry = self.actor_registry.write().await;
@@ -168,7 +168,7 @@ impl ClusterNode {
                             if let Ok(cluster_msg) = ClusterMessage::decode(envelope.payload.as_slice()) {
                                 match cluster_msg.payload {
                                     Some(cluster_message::Payload::Gossip(gossip)) => {
-                                        cluster.merge_gossip(gossip).await;
+                                        cluster.merge_gossip(gossip, &envelope.sender_node).await;
 
                                         //send our gossip back
                                         let our_gossip = cluster.create_gossip_message().await;
@@ -267,7 +267,7 @@ impl ClusterNode {
         if let Ok(response) = conn.recv().await {
             if let Ok(cluster_resp) = ClusterMessage::decode(response.payload.as_slice()) {
                 if let Some(cluster_message::Payload::Gossip(their_gossip)) = cluster_resp.payload {
-                    self.merge_gossip(their_gossip).await;
+                    self.merge_gossip(their_gossip, &response.sender_node).await;
                 }
             }
         }

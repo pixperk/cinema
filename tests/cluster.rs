@@ -23,7 +23,7 @@ async fn gossip_merges_membership() {
 
     // Node A sends gossip to Node B
     let gossip_from_a = node_a.create_gossip_message().await;
-    node_b.merge_gossip(gossip_from_a).await;
+    node_b.merge_gossip(gossip_from_a, "node-a").await;
 
     // Node B now knows about A
     let members_b = node_b.get_members().await;
@@ -32,7 +32,7 @@ async fn gossip_merges_membership() {
 
     // Node B sends gossip back to Node A
     let gossip_from_b = node_b.create_gossip_message().await;
-    node_a.merge_gossip(gossip_from_b).await;
+    node_a.merge_gossip(gossip_from_b, "node-b").await;
 
     // Node A now knows about B and C
     let members_a = node_a.get_members().await;
