@@ -42,7 +42,7 @@ async fn actor_stops_itself() {
     //give some time for the actor to start
     tokio::time::sleep(std::time::Duration::from_millis(10)).await;
 
-    addr.do_send(StopMe);
+    addr.do_send(StopMe).await.unwrap();
 
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     assert!(stopped.load(Ordering::SeqCst));
@@ -111,7 +111,7 @@ async fn registry_auto_unregisters_on_actor_death() {
     assert!(found.is_some());
 
     // Stop the actor
-    addr.do_send(StopMe);
+    addr.do_send(StopMe).await.unwrap();
 
     // Wait for actor to die and auto-unregister (50ms poll + some buffer)
     tokio::time::sleep(std::time::Duration::from_millis(150)).await;
@@ -132,7 +132,7 @@ async fn registry_manual_does_not_auto_unregister() {
     sys.register_manual("manual_actor", addr.clone());
 
     // Stop the actor
-    addr.do_send(StopMe);
+    addr.do_send(StopMe).await.unwrap();
 
     // Wait some time
     tokio::time::sleep(std::time::Duration::from_millis(150)).await;

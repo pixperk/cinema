@@ -190,7 +190,7 @@ impl<A: Actor> Context<A> {
     /// Spawn a child with custom restart strategy
     pub fn spawn_child_with_strategy<C, F>(
         &mut self,
-        mut factory: F,
+        factory: F,
         strategy: SupervisorStrategy,
     ) -> Addr<C>
     where

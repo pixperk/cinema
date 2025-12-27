@@ -57,7 +57,7 @@ async fn actor_panic_stops_gracefully() {
 
     tokio::time::sleep(Duration::from_millis(10)).await;
 
-    addr.do_send(Crash);
+    addr.do_send(Crash).await.unwrap();
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
@@ -74,9 +74,9 @@ async fn actor_continues_after_normal_messages() {
     let sys = ActorSystem::new();
     let addr = sys.spawn(actor);
 
-    addr.do_send(Ping);
-    addr.do_send(Ping);
-    addr.do_send(Ping);
+    addr.do_send(Ping).await.unwrap();
+    addr.do_send(Ping).await.unwrap();
+    addr.do_send(Ping).await.unwrap();
 
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
@@ -152,7 +152,7 @@ async fn watch_notifies_on_death() {
 
     tokio::time::sleep(Duration::from_millis(10)).await;
 
-    worker_addr.do_send(Die);
+    worker_addr.do_send(Die).await.unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert!(worker_died.load(Ordering::SeqCst));
 }
@@ -241,7 +241,7 @@ async fn child_stopping_notifies_parent() {
     impl Handler<StopChild> for Parent {
         fn handle(&mut self, _msg: StopChild, _ctx: &mut Context<Self>) {
             if let Some(child) = &self.child_addr {
-                child.do_send(DieMsg);
+                let _ = child.try_send(DieMsg);
             }
         }
     }
@@ -251,7 +251,7 @@ async fn child_stopping_notifies_parent() {
 
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    parent.do_send(StopChild);
+    parent.do_send(StopChild).await.unwrap();
 
     tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -320,7 +320,7 @@ async fn actor_restarts_on_panic() {
     assert_eq!(RESTART_COUNT.load(Ordering::SeqCst), 1);
 
     for i in 2..=4 {
-        worker.do_send(CrashMsg);
+        worker.do_send(CrashMsg).await.unwrap();
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert_eq!(RESTART_COUNT.load(Ordering::SeqCst), i);
     }
@@ -384,13 +384,13 @@ async fn actor_stops_after_max_restarts() {
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     // Crash 3 times - limit is 2
-    worker.do_send(CrashMsg);
+    worker.do_send(CrashMsg).await.unwrap();
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    worker.do_send(CrashMsg);
+    worker.do_send(CrashMsg).await.unwrap();
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    worker.do_send(CrashMsg);
+    worker.do_send(CrashMsg).await.unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Should have started 3 times (initial + 2 restarts), then stopped
@@ -459,7 +459,7 @@ async fn escalate_triggers_parent_restart() {
     impl Handler<CrashGrandchild> for Parent {
         fn handle(&mut self, _msg: CrashGrandchild, _ctx: &mut Context<Self>) {
             if let Some(ref gc) = self.grandchild {
-                gc.do_send(CrashMsg);
+                let _ = gc.try_send(CrashMsg);
             }
         }
     }
@@ -504,7 +504,7 @@ async fn escalate_triggers_parent_restart() {
         "Grandchild should have started once"
     );
 
-    parent.do_send(CrashGrandchild);
+    parent.do_send(CrashGrandchild).await.unwrap();
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 

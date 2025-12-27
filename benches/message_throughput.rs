@@ -21,13 +21,14 @@ fn bench_do_send_throughput(c: &mut Criterion) {
                     .iter(|| async move {
                         let count = Arc::new(AtomicUsize::new(0));
                         let sys = ActorSystem::new();
-                        let addr = sys.spawn(CounterActor {
+                        // Use larger capacity for high-throughput benchmark
+                        let addr = sys.spawn_with_capacity(CounterActor {
                             count: count.clone(),
-                        });
+                        }, 10000);
 
-                        // send messages
+                        // send messages (use try_send for non-blocking throughput test)
                         for _ in 0..msg_count {
-                            addr.do_send(Count);
+                            addr.try_send(Count).unwrap();
                         }
 
                         // wait for processing
@@ -47,18 +48,19 @@ fn bench_do_send_throughput(c: &mut Criterion) {
 
                 for _ in 0..100 {
                     let count = Arc::new(AtomicUsize::new(0));
+                    // Use larger capacity for parallel throughput benchmark
                     actors.push((
-                        sys.spawn(CounterActor {
+                        sys.spawn_with_capacity(CounterActor {
                             count: count.clone(),
-                        }),
+                        }, 1000),
                         count,
                     ));
                 }
 
-                // send to all actors
+                // send to all actors (use try_send for non-blocking throughput test)
                 for (addr, _) in &actors {
                     for _ in 0..1000 {
-                        addr.do_send(Count);
+                        addr.try_send(Count).unwrap();
                     }
                 }
 

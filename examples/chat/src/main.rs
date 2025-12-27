@@ -64,7 +64,7 @@ impl ChatServer {
 
     fn broadcast(&self, message: &str) {
         for client in self.clients.values() {
-            client.do_send(SendLine(message.to_string()));
+            let _ = client.try_send(SendLine(message.to_string()));
         }
     }
 }
@@ -96,7 +96,7 @@ impl Handler<Broadcast> for ChatServer {
         let line = format!("[{}]: {}\n", msg.from, msg.text);
         for (username, client) in &self.clients {
             if username != &msg.from {
-                client.do_send(SendLine(line.clone()));
+                let _ = client.try_send(SendLine(line.clone()));
             }
         }
     }
@@ -119,14 +119,14 @@ impl Actor for ClientSession {
         }
 
         // Register with the chat server
-        self.server.do_send(Connect {
+        let _ = self.server.try_send(Connect {
             username: self.username.clone(),
             addr: ctx.address(),
         });
     }
 
     fn stopped(&mut self, _ctx: &mut Context<Self>) {
-        self.server.do_send(Disconnect {
+        let _ = self.server.try_send(Disconnect {
             username: self.username.clone(),
         });
     }
@@ -138,7 +138,7 @@ impl StreamHandler<Result<String, io::Error>> for ClientSession {
             Ok(line) => {
                 let line = line.trim();
                 if !line.is_empty() {
-                    self.server.do_send(Broadcast {
+                    let _ = self.server.try_send(Broadcast {
                         from: self.username.clone(),
                         text: line.to_string(),
                     });

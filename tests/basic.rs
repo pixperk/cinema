@@ -282,7 +282,7 @@ async fn cancelled_timer_does_not_fire() {
 
     tokio::time::sleep(Duration::from_millis(10)).await;
 
-    addr.do_send(CancelMsg);
+    addr.do_send(CancelMsg).await.unwrap();
 
     // Wait past the timer delay
     tokio::time::sleep(Duration::from_millis(60)).await;
@@ -342,7 +342,7 @@ async fn cancelled_interval_stops_firing() {
     );
 
     // Cancel the interval
-    addr.do_send(CancelMsg);
+    addr.do_send(CancelMsg).await.unwrap();
 
     // Wait a bit for cancel to process
     tokio::time::sleep(Duration::from_millis(10)).await;
@@ -412,7 +412,7 @@ async fn async_handler_fire_and_forget() {
     let sys = ActorSystem::new();
     let addr = sys.spawn(CounterActor);
 
-    addr.do_send_async(AsyncIncrement(count.clone()));
+    addr.do_send_async(AsyncIncrement(count.clone())).await.unwrap();
 
     // Wait for async handler to complete
     tokio::time::sleep(Duration::from_millis(50)).await;

@@ -196,7 +196,7 @@ where
     A: Actor + Handler<Terminated>,
 {
     fn notify(&self, id: ActorId) {
-        self.do_send(Terminated { id });
+        let _ = self.try_send(Terminated { id });
     }
 }
 
