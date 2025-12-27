@@ -49,7 +49,7 @@ async fn send_message() {
     let addr = sys.spawn(actor);
 
     for _ in 0..10 {
-        addr.do_send(Ping);
+        addr.do_send(Ping).await.unwrap();
     }
 
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;

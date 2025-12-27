@@ -129,7 +129,7 @@ impl<A: Actor> Context<A> {
         tokio::spawn(async move {
             tokio::time::sleep(delay).await;
             if !handle_clone.is_cancelled() {
-                addr.do_send(msg);
+                let _ = addr.do_send(msg).await;
             }
         });
 
@@ -154,7 +154,7 @@ impl<A: Actor> Context<A> {
                 if !addr.is_alive() || handle_clone.is_cancelled() {
                     break;
                 }
-                addr.do_send(msg.clone());
+                let _ = addr.do_send(msg.clone()).await;
             }
         });
 
@@ -170,10 +170,20 @@ impl<A: Actor> Context<A> {
         C: Actor,
         A: Handler<Terminated>,
     {
+        self.spawn_child_with_capacity(child, 256)
+    }
+
+    ///Spawn a child actor with custom mailbox capacity
+    pub fn spawn_child_with_capacity<C>(&mut self, child: C, capacity: usize) -> Addr<C>
+    where
+        C: Actor,
+        A: Handler<Terminated>,
+    {
         let mut child_opt = Some(child);
-        self.spawn_child_with_strategy(
+        self.spawn_child_with_strategy_and_capacity(
             move || child_opt.take().expect("Factory called more than once"),
             SupervisorStrategy::Stop,
+            capacity,
         )
     }
 
@@ -188,7 +198,22 @@ impl<A: Actor> Context<A> {
         A: Handler<Terminated>,
         F: FnMut() -> C + Send + 'static,
     {
-        let (tx, mut rx) = mpsc::unbounded_channel::<ActorMessage<C>>();
+        self.spawn_child_with_strategy_and_capacity(factory, strategy, 256)
+    }
+
+    /// Spawn a child with custom restart strategy and mailbox capacity
+    pub fn spawn_child_with_strategy_and_capacity<C, F>(
+        &mut self,
+        mut factory: F,
+        strategy: SupervisorStrategy,
+        capacity: usize,
+    ) -> Addr<C>
+    where
+        C: Actor,
+        A: Handler<Terminated>,
+        F: FnMut() -> C + Send + 'static,
+    {
+        let (tx, mut rx) = mpsc::channel::<ActorMessage<C>>(capacity);
         let child_id = ActorId::new();
         let child_stop_signal = Arc::new(Notify::new());
         let child_addr = Addr::new(tx, child_id, child_stop_signal.clone());

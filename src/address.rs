@@ -21,7 +21,7 @@ pub trait ChildHandle: Send + Sync {
 /// Allows sending messages to the actor
 /// Also allows registering watchers to be notified when the actor stops
 pub struct Addr<A: Actor> {
-    sender: mpsc::UnboundedSender<ActorMessage<A>>,
+    sender: mpsc::Sender<ActorMessage<A>>,
     id: ActorId,
     watchers: Arc<Mutex<Vec<Arc<dyn Watcher>>>>,
     stop_signal: Arc<Notify>,
@@ -29,7 +29,7 @@ pub struct Addr<A: Actor> {
 
 impl<A: Actor> Addr<A> {
     pub fn new(
-        sender: mpsc::UnboundedSender<ActorMessage<A>>,
+        sender: mpsc::Sender<ActorMessage<A>>,
         id: ActorId,
         stop_signal: Arc<Notify>,
     ) -> Self {
@@ -55,6 +55,7 @@ impl<A: Actor> Addr<A> {
         let envelope = MessageEnvelope::with_response(msg, tx);
         self.sender
             .send(ActorMessage::Sync(Box::new(envelope)))
+            .await
             .map_err(|_| MailboxError::MailboxClosed)?;
 
         rx.await.map_err(|_| MailboxError::MailboxClosed)
@@ -73,6 +74,7 @@ impl<A: Actor> Addr<A> {
         let envelope = MessageEnvelope::with_response(msg, tx);
         self.sender
             .send(ActorMessage::Sync(Box::new(envelope)))
+            .await
             .map_err(|_| MailboxError::MailboxClosed)?;
 
         match tokio::time::timeout(timeout, rx).await {
@@ -82,23 +84,61 @@ impl<A: Actor> Addr<A> {
     }
 
     ///Fire and forget message sending
-    pub fn do_send<M>(&self, msg: M)
+    pub async fn do_send<M>(&self, msg: M) -> Result<(), MailboxError>
     where
         A: Handler<M>,
         M: Message,
     {
         let envelope = MessageEnvelope::new(msg);
-        let _ = self.sender.send(ActorMessage::Sync(Box::new(envelope)));
+        self.sender
+            .send(ActorMessage::Sync(Box::new(envelope)))
+            .await
+            .map_err(|_| MailboxError::MailboxClosed)
     }
 
     /// Fire and forget for async handlers
-    pub fn do_send_async<M>(&self, msg: M)
+    pub async fn do_send_async<M>(&self, msg: M) -> Result<(), MailboxError>
     where
         A: AsyncHandler<M>,
         M: Message,
     {
         let envelope = AsyncMessageEnvelope::new(msg);
-        let _ = self.sender.send(ActorMessage::Async(Box::new(envelope)));
+        self.sender
+            .send(ActorMessage::Async(Box::new(envelope)))
+            .await
+            .map_err(|_| MailboxError::MailboxClosed)
+    }
+
+    /// Try to send a message without blocking
+    /// Returns MailboxFull if the mailbox is at capacity
+    pub fn try_send<M>(&self, msg: M) -> Result<(), MailboxError>
+    where
+        A: Handler<M>,
+        M: Message,
+    {
+        let envelope = MessageEnvelope::new(msg);
+        self.sender
+            .try_send(ActorMessage::Sync(Box::new(envelope)))
+            .map_err(|e| match e {
+                mpsc::error::TrySendError::Full(_) => MailboxError::MailboxFull,
+                mpsc::error::TrySendError::Closed(_) => MailboxError::MailboxClosed,
+            })
+    }
+
+    /// Try to send a message to async handler without blocking
+    /// Returns MailboxFull if the mailbox is at capacity
+    pub fn try_send_async<M>(&self, msg: M) -> Result<(), MailboxError>
+    where
+        A: AsyncHandler<M>,
+        M: Message,
+    {
+        let envelope = AsyncMessageEnvelope::new(msg);
+        self.sender
+            .try_send(ActorMessage::Async(Box::new(envelope)))
+            .map_err(|e| match e {
+                mpsc::error::TrySendError::Full(_) => MailboxError::MailboxFull,
+                mpsc::error::TrySendError::Closed(_) => MailboxError::MailboxClosed,
+            })
     }
 
     /// Send and wait for response from async handler
@@ -111,6 +151,7 @@ impl<A: Actor> Addr<A> {
         let envelope = AsyncMessageEnvelope::with_response(msg, tx);
         self.sender
             .send(ActorMessage::Async(Box::new(envelope)))
+            .await
             .map_err(|_| MailboxError::MailboxClosed)?;
         rx.await.map_err(|_| MailboxError::MailboxClosed)
     }

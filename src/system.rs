@@ -27,12 +27,20 @@ impl ActorSystem {
         }
     }
 
-    //spawn a top-level actor
+    //spawn a top-level actor with default mailbox capacity of 256
     pub fn spawn<A>(&self, actor: A) -> Addr<A>
     where
         A: Actor,
     {
-        spawn_with_shutdown(actor, self.shutdown.clone())
+        self.spawn_with_capacity(actor, 256)
+    }
+
+    //spawn a top-level actor with custom mailbox capacity
+    pub fn spawn_with_capacity<A>(&self, actor: A, capacity: usize) -> Addr<A>
+    where
+        A: Actor,
+    {
+        spawn_with_shutdown(actor, self.shutdown.clone(), capacity)
     }
 
     //gracefully shutdown the actor system
@@ -65,11 +73,11 @@ impl Default for ActorSystem {
     }
 }
 
-fn spawn_with_shutdown<A>(mut actor: A, shutdown: Arc<Notify>) -> Addr<A>
+fn spawn_with_shutdown<A>(mut actor: A, shutdown: Arc<Notify>, capacity: usize) -> Addr<A>
 where
     A: Actor,
 {
-    let (tx, mut rx) = mpsc::unbounded_channel::<ActorMessage<A>>();
+    let (tx, mut rx) = mpsc::channel::<ActorMessage<A>>(capacity);
     let id = ActorId::new();
 
     let stop_signal = Arc::new(Notify::new());

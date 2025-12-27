@@ -4,6 +4,8 @@ pub enum MailboxError {
     MailboxClosed,
     ///Requested operation timed out
     Timeout,
+    ///Actor's mailbox is full (bounded channel at capacity)
+    MailboxFull,
 }
 
 impl std::fmt::Display for MailboxError {
@@ -11,6 +13,7 @@ impl std::fmt::Display for MailboxError {
         match self {
             MailboxError::MailboxClosed => write!(f, "Actor's mailbox is closed"),
             MailboxError::Timeout => write!(f, "Requested operation timed out"),
+            MailboxError::MailboxFull => write!(f, "Actor's mailbox is full"),
         }
     }
 }
